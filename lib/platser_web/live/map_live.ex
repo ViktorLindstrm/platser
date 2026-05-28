@@ -120,16 +120,18 @@ defmodule PlatserWeb.MapLive do
     ~H"""
     <Layouts.app flash={@flash}>
       <%!-- Full-viewport map canvas --%>
-      <div
-        id="map-canvas"
-        class="fixed inset-0 z-10"
-        phx-hook="Map"
-        phx-update="ignore"
-        data-pmtiles-url={@pmtiles_url}
-        data-map-center="-36.8485,174.7633"
-        data-map-zoom="12"
-        data-map-flavor="light"
-      />
+      <div id="map-wrapper" style="position: fixed; inset: 0; z-index: 10;">
+        <div
+          id="map-canvas"
+          style="width: 100%; height: 100%;"
+          phx-hook="Map"
+          phx-update="ignore"
+          data-pmtiles-url={@pmtiles_url}
+          data-map-center="-36.8485,174.7633"
+          data-map-zoom="12"
+          data-map-flavor="light"
+        />
+      </div>
 
       <%!-- Top bar: event name --%>
       <div class="fixed top-0 left-0 right-0 z-20 pointer-events-none">

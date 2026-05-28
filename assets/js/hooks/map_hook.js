@@ -9,27 +9,47 @@ if (!window.__platserPmtilesProtocolRegistered) {
   window.__platserPmtilesProtocolRegistered = true
 }
 
-function buildStyle(pmtilesUrl, flavorName, language) {
-  const flavor = namedFlavor(flavorName)
-  const style = {
+function buildStyle(mapUrl, flavorName, language) {
+  if (!mapUrl.startsWith("pmtiles://") && !mapUrl.startsWith("https://") && !mapUrl.startsWith("http://")) {
+    mapUrl = "pmtiles://" + mapUrl
+  }
+
+  if (mapUrl.startsWith("pmtiles://")) {
+    const flavor = namedFlavor(flavorName)
+    const style = {
+      version: 8,
+      sources: {
+        protomaps: {
+          type: "vector",
+          url: mapUrl,
+          attribution:
+            '<a href="https://github.com/protomaps/basemaps">Protomaps</a> © <a href="https://osm.org/copyright">OpenStreetMap</a>',
+        },
+      },
+      layers: layers("protomaps", flavor, {lang: language}),
+      glyphs: "https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf",
+    }
+
+    if (flavorName === "light" || flavorName === "dark") {
+      style.sprite = `https://protomaps.github.io/basemaps-assets/sprites/v4/${flavorName}`
+    }
+
+    return style
+  }
+
+  // Raster tile fallback (e.g. OpenStreetMap)
+  return {
     version: 8,
     sources: {
-      protomaps: {
-        type: "vector",
-        url: pmtilesUrl,
-        attribution:
-          '<a href="https://github.com/protomaps/basemaps">Protomaps</a> © <a href="https://osm.org/copyright">OpenStreetMap</a>',
+      raster: {
+        type: "raster",
+        tiles: [mapUrl],
+        tileSize: 256,
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       },
     },
-    layers: layers("protomaps", flavor, {lang: language}),
-    glyphs: "https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf",
+    layers: [{id: "raster-tiles", type: "raster", source: "raster"}],
   }
-
-  if (flavorName === "light" || flavorName === "dark") {
-    style.sprite = `https://protomaps.github.io/basemaps-assets/sprites/v4/${flavorName}`
-  }
-
-  return style
 }
 
 function parseCenter(value) {
