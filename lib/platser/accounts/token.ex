@@ -8,7 +8,7 @@ defmodule Platser.Accounts.Token do
 
   postgres do
     table "tokens"
-    repo Platser.Repo
+    repo(Platser.Repo)
   end
 
   actions do

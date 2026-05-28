@@ -8,7 +8,7 @@ defmodule Platser.Accounts.User do
 
   postgres do
     table "users"
-    repo Platser.Repo
+    repo(Platser.Repo)
   end
 
   authentication do
@@ -31,12 +31,6 @@ defmodule Platser.Accounts.User do
       signing_secret Platser.Secrets
       store_all_tokens? true
       require_token_presence_for_authentication? true
-    end
-  end
-
-  identities do
-    identity :unique_email, [:email] do
-      pre_check_with Platser.Accounts
     end
   end
 
@@ -71,5 +65,11 @@ defmodule Platser.Accounts.User do
     attribute :display_name, :string, allow_nil?: false, public?: true
     attribute :hashed_password, :string, allow_nil?: true, sensitive?: true
     attribute :is_simulated, :boolean, default: false, public?: true
+  end
+
+  identities do
+    identity :unique_email, [:email] do
+      pre_check_with Platser.Accounts
+    end
   end
 end

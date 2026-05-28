@@ -32,9 +32,14 @@ defmodule PlatserWeb.Router do
   end
 
   live_session :authenticated,
-    on_mount: [{AshAuthentication.LiveView, :live_session_required}] do
+    on_mount: [
+      {AshAuthentication.Phoenix.LiveSession, :default},
+      {PlatserWeb.LiveUserAuth, :live_user_required}
+    ] do
     scope "/", PlatserWeb do
       pipe_through :browser
+
+      live "/join/:code", Events.JoinLive
     end
   end
 

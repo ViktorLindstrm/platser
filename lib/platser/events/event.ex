@@ -12,11 +12,32 @@ defmodule Platser.Events.Event do
 
   actions do
     defaults [:read]
+
+    read :get_by_join_code do
+      description "Look up an event by its invite join code. Any authenticated user may call this."
+      get? true
+      argument :join_code, :string, allow_nil?: false
+      filter expr(join_code == ^arg(:join_code))
+    end
+
+    update :regenerate_join_code do
+      description "Replaces the event's join code with a freshly generated one."
+      require_atomic? false
+      change Platser.Events.Changes.GenerateJoinCode
+    end
   end
 
   policies do
-    policy action_type(:read) do
+    policy action(:read) do
       authorize_if expr(exists(memberships, user_id == ^actor(:id)))
+    end
+
+    policy action(:get_by_join_code) do
+      authorize_if actor_present()
+    end
+
+    policy action(:regenerate_join_code) do
+      authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
     end
   end
 

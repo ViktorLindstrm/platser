@@ -12,14 +12,26 @@ defmodule Platser.Events.Membership do
 
   actions do
     defaults [:read]
+
+    create :join do
+      description "Join an event via its invite join code."
+      argument :join_code, :string, allow_nil?: false
+      change set_attribute(:role, :member)
+      change relate_actor(:user)
+      change Platser.Events.Changes.SetEventByJoinCode
+    end
   end
 
   policies do
-    policy action_type(:read) do
+    policy action(:read) do
       authorize_if expr(
                      user_id == ^actor(:id) or
                        exists(event.memberships, user_id == ^actor(:id) and role == :admin)
                    )
+    end
+
+    policy action(:join) do
+      authorize_if actor_present()
     end
   end
 
