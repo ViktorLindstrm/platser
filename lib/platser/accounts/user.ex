@@ -2,10 +2,23 @@ defmodule Platser.Accounts.User do
   use Ash.Resource,
     otp_app: :platser,
     domain: Platser.Accounts,
+    data_layer: AshPostgres.DataLayer,
     authorizers: [Ash.Policy.Authorizer],
     extensions: [AshAuthentication]
 
+  postgres do
+    table "users"
+    repo Platser.Repo
+  end
+
   authentication do
+    strategies do
+      password :password do
+        hashed_password_field :hashed_password
+        identity_field :email
+      end
+    end
+
     add_ons do
       log_out_everywhere do
         apply_on_password_change? true
@@ -21,8 +34,22 @@ defmodule Platser.Accounts.User do
     end
   end
 
+  identities do
+    identity :unique_email, [:email] do
+      pre_check_with Platser.Accounts
+    end
+  end
+
   actions do
     defaults [:read]
+
+    create :register do
+      primary? true
+      argument :password, :string, allow_nil?: false, sensitive?: true
+      argument :password_confirmation, :string, allow_nil?: false, sensitive?: true
+      validate confirm(:password, :password_confirmation)
+      change AshAuthentication.Changes.HashPassword
+    end
 
     read :get_by_subject do
       description "Get a user by the subject claim in a JWT"
@@ -40,5 +67,9 @@ defmodule Platser.Accounts.User do
 
   attributes do
     uuid_primary_key :id
+    attribute :email, :ci_string, allow_nil?: false, public?: true
+    attribute :display_name, :string, allow_nil?: false, public?: true
+    attribute :hashed_password, :string, allow_nil?: true, sensitive?: true
+    attribute :is_simulated, :boolean, default: false, public?: true
   end
 end

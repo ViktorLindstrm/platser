@@ -41,8 +41,13 @@ defmodule Platser.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
+      {:ash_phoenix, "~> 2.0"},
+      {:ash_authentication_phoenix, "~> 2.0"},
       {:picosat_elixir, "~> 0.2"},
       {:ash_authentication, "~> 4.0"},
+      {:ash_postgres, "~> 2.9"},
+      {:geo_postgis, "~> 3.7"},
+      {:igniter, "~> 0.8", only: [:dev, :test]},
       {:tidewave, "~> 0.5", only: [:dev]},
       {:sourceror, "~> 1.8", only: [:dev, :test]},
       {:ash, "~> 3.0"},

@@ -1,5 +1,8 @@
 defmodule PlatserWeb.Router do
   use PlatserWeb, :router
+  use AshAuthentication.Phoenix.Router
+
+  import AshAuthentication.Plug.Helpers
 
   pipeline :browser do
     plug :accepts, ["html"]
@@ -8,16 +11,31 @@ defmodule PlatserWeb.Router do
     plug :put_root_layout, html: {PlatserWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    plug :load_from_session
   end
 
   pipeline :api do
     plug :accepts, ["json"]
+    plug :load_from_bearer
+    plug :set_actor, :user
   end
 
   scope "/", PlatserWeb do
     pipe_through :browser
 
     get "/", PageController, :home
+
+    sign_in_route register_path: "/register", reset_path: "/reset", auth_routes_prefix: "/auth"
+    reset_route auth_routes_prefix: "/auth"
+    sign_out_route AuthController
+    auth_routes AuthController, Platser.Accounts.User, path: "/auth"
+  end
+
+  live_session :authenticated,
+    on_mount: [{AshAuthentication.LiveView, :live_session_required}] do
+    scope "/", PlatserWeb do
+      pipe_through :browser
+    end
   end
 
   # Other scopes may use custom stacks.

@@ -50,7 +50,7 @@ config :spark,
 config :platser,
   ecto_repos: [Platser.Repo],
   generators: [timestamp_type: :utc_datetime],
-  ash_domains: [Platser.Accounts]
+  ash_domains: [Platser.Activity, Platser.Media, Platser.Map, Platser.Events, Platser.Accounts]
 
 # Configure the endpoint
 config :platser, PlatserWeb.Endpoint,

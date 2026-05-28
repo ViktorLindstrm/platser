@@ -2,8 +2,14 @@ defmodule Platser.Accounts.Token do
   use Ash.Resource,
     otp_app: :platser,
     domain: Platser.Accounts,
+    data_layer: AshPostgres.DataLayer,
     authorizers: [Ash.Policy.Authorizer],
     extensions: [AshAuthentication.TokenResource]
+
+  postgres do
+    table "tokens"
+    repo Platser.Repo
+  end
 
   actions do
     defaults [:read]
