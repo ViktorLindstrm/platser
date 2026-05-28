@@ -37,15 +37,14 @@ function parseCenter(value) {
     return [0, 0]
   }
 
-  const [longitude, latitude] = value
-    .split(",")
-    .map(part => Number.parseFloat(part.trim()))
+  const parts = value.split(",").map(part => Number.parseFloat(part.trim()))
+  const [lat, lon] = parts
 
-  if (Number.isNaN(longitude) || Number.isNaN(latitude)) {
+  if (Number.isNaN(lat) || Number.isNaN(lon)) {
     return [0, 0]
   }
 
-  return [longitude, latitude]
+  return [lon, lat]
 }
 
 function parseZoom(value) {
@@ -66,6 +65,14 @@ export default {
       throw new Error("Map hook requires data-pmtiles-url")
     }
 
+    this.sourceData = {
+      pois: {type: "FeatureCollection", features: []},
+      geofences: {type: "FeatureCollection", features: []},
+    }
+
+    this.mapReady = false
+    this.pendingCallbacks = []
+
     this.map = new maplibregl.Map({
       container: this.el,
       style: buildStyle(
@@ -80,6 +87,121 @@ export default {
     })
 
     this.map.addControl(new maplibregl.NavigationControl(), "top-right")
+
+    this.map.on("load", () => {
+      this.mapReady = true
+      this.pendingCallbacks.forEach(fn => fn())
+      this.pendingCallbacks = []
+    })
+
+    this.handleEvent("map_init", ({pois, geofences}) => {
+      this.runWhenReady(() => this._initSources(pois, geofences))
+    })
+
+    this.handleEvent("poi_added", feature => {
+      this.runWhenReady(() => this._upsertFeature("pois", feature))
+    })
+
+    this.handleEvent("poi_updated", feature => {
+      this.runWhenReady(() => this._upsertFeature("pois", feature))
+    })
+
+    this.handleEvent("poi_removed", ({id}) => {
+      this.runWhenReady(() => this._removeFeature("pois", id))
+    })
+
+    this.handleEvent("geofence_added", feature => {
+      this.runWhenReady(() => this._upsertFeature("geofences", feature))
+    })
+
+    this.handleEvent("geofence_updated", feature => {
+      this.runWhenReady(() => this._upsertFeature("geofences", feature))
+    })
+
+    this.handleEvent("geofence_removed", ({id}) => {
+      this.runWhenReady(() => this._removeFeature("geofences", id))
+    })
+  },
+
+  runWhenReady(fn) {
+    if (this.mapReady) {
+      fn()
+    } else {
+      this.pendingCallbacks.push(fn)
+    }
+  },
+
+  _initSources(pois, geofences) {
+    this.sourceData.pois = pois
+    this.sourceData.geofences = geofences
+
+    if (!this.map.getSource("pois")) {
+      this.map.addSource("pois", {type: "geojson", data: pois})
+    } else {
+      this.map.getSource("pois").setData(pois)
+    }
+
+    if (!this.map.getSource("geofences")) {
+      this.map.addSource("geofences", {type: "geojson", data: geofences})
+    } else {
+      this.map.getSource("geofences").setData(geofences)
+    }
+
+    if (!this.map.getLayer("geofence-fills")) {
+      this.map.addLayer({
+        id: "geofence-fills",
+        type: "fill",
+        source: "geofences",
+        paint: {
+          "fill-color": ["coalesce", ["get", "color"], "#6366F1"],
+          "fill-opacity": 0.2,
+        },
+      })
+    }
+
+    if (!this.map.getLayer("geofence-lines")) {
+      this.map.addLayer({
+        id: "geofence-lines",
+        type: "line",
+        source: "geofences",
+        paint: {
+          "line-color": ["coalesce", ["get", "color"], "#6366F1"],
+          "line-width": 2,
+          "line-opacity": 0.8,
+        },
+      })
+    }
+
+    if (!this.map.getLayer("poi-circles")) {
+      this.map.addLayer({
+        id: "poi-circles",
+        type: "circle",
+        source: "pois",
+        paint: {
+          "circle-radius": 9,
+          "circle-color": "#3B82F6",
+          "circle-stroke-width": 2,
+          "circle-stroke-color": "#ffffff",
+        },
+      })
+    }
+  },
+
+  _upsertFeature(sourceId, feature) {
+    const data = this.sourceData[sourceId]
+    if (!data) return
+    data.features = data.features.filter(f => f.id !== feature.id)
+    data.features.push(feature)
+    const source = this.map.getSource(sourceId)
+    if (source) source.setData(data)
+  },
+
+  _removeFeature(sourceId, id) {
+    const data = this.sourceData[sourceId]
+    if (!data) return
+    data.features = data.features.filter(f => f.id !== id)
+    const source = this.map.getSource(sourceId)
+    if (source) source.setData(data)
   },
 
   destroyed() {

@@ -12,6 +12,12 @@ defmodule Platser.Activity.Entry do
 
   actions do
     defaults [:read]
+
+    read :list_by_event do
+      argument :event_id, :uuid, allow_nil?: false
+      filter expr(event_id == ^arg(:event_id))
+      prepare build(sort: [inserted_at: :desc], limit: 50)
+    end
   end
 
   policies do

@@ -13,6 +13,14 @@ defmodule Platser.Events.Event do
   actions do
     defaults [:read]
 
+    create :create do
+      primary? true
+      accept [:name, :description, :starts_at, :ends_at]
+      change relate_actor(:creator)
+      change Platser.Events.Changes.GenerateJoinCode
+      change Platser.Events.Changes.CreateAdminMembership
+    end
+
     read :get_by_join_code do
       description "Look up an event by its invite join code. Any authenticated user may call this."
       get? true
@@ -28,6 +36,10 @@ defmodule Platser.Events.Event do
   end
 
   policies do
+    policy action(:create) do
+      authorize_if actor_present()
+    end
+
     policy action(:read) do
       authorize_if expr(exists(memberships, user_id == ^actor(:id)))
     end

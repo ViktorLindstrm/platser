@@ -39,10 +39,11 @@ defmodule Platser.Accounts.User do
 
     create :register do
       primary? true
+      accept [:email, :display_name]
       argument :password, :string, allow_nil?: false, sensitive?: true
       argument :password_confirmation, :string, allow_nil?: false, sensitive?: true
       validate confirm(:password, :password_confirmation)
-      change AshAuthentication.Changes.HashPassword
+      change AshAuthentication.Strategy.Password.HashPasswordChange
     end
 
     read :get_by_subject do

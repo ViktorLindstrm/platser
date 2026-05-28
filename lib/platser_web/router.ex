@@ -40,6 +40,7 @@ defmodule PlatserWeb.Router do
       pipe_through :browser
 
       live "/join/:code", Events.JoinLive
+      live "/events/:event_id/map", MapLive
     end
   end
 

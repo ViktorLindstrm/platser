@@ -4,6 +4,7 @@ defmodule Platser.Events do
 
   resources do
     resource Platser.Events.Event do
+      define :create_event, action: :create
       define :get_event_by_join_code, action: :get_by_join_code, args: [:join_code]
       define :regenerate_event_join_code, action: :regenerate_join_code
     end

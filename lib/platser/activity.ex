@@ -3,6 +3,8 @@ defmodule Platser.Activity do
     otp_app: :platser
 
   resources do
-    resource Platser.Activity.Entry
+    resource Platser.Activity.Entry do
+      define :list_entries_for_event, action: :list_by_event, args: [:event_id]
+    end
   end
 end

@@ -84,6 +84,12 @@ defmodule PlatserWeb.Events.JoinLive do
                 <div class="text-sm text-base-content/50">
                   {@event.starts_at |> Calendar.strftime("%b %-d, %Y at %H:%M")}
                 </div>
+                <.link
+                  navigate={~p"/events/#{@event.id}/map"}
+                  class="inline-flex items-center gap-2 w-full justify-center py-3 px-6 rounded-xl bg-primary text-primary-content font-semibold hover:brightness-110 active:scale-95 transition-all"
+                >
+                  <.icon name="hero-map" class="w-5 h-5" /> Open Map
+                </.link>
               </div>
             </div>
           <% @status == :joined -> %>
@@ -99,6 +105,12 @@ defmodule PlatserWeb.Events.JoinLive do
                 <div class="text-sm text-base-content/50">
                   {@event.starts_at |> Calendar.strftime("%b %-d, %Y at %H:%M")}
                 </div>
+                <.link
+                  navigate={~p"/events/#{@event.id}/map"}
+                  class="inline-flex items-center gap-2 w-full justify-center py-3 px-6 rounded-xl bg-primary text-primary-content font-semibold hover:brightness-110 active:scale-95 transition-all"
+                >
+                  <.icon name="hero-map" class="w-5 h-5" /> Open Map
+                </.link>
               </div>
             </div>
           <% @status == :admin -> %>
@@ -138,6 +150,13 @@ defmodule PlatserWeb.Events.JoinLive do
                     Regenerating will invalidate the current code. Existing members keep their access.
                   </p>
                 </div>
+
+                <.link
+                  navigate={~p"/events/#{@event.id}/map"}
+                  class="inline-flex items-center gap-2 w-full justify-center py-3 px-6 rounded-xl bg-primary text-primary-content font-semibold hover:brightness-110 active:scale-95 transition-all"
+                >
+                  <.icon name="hero-map" class="w-5 h-5" /> Open Map
+                </.link>
               </div>
             </div>
           <% true -> %>

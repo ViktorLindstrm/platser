@@ -12,6 +12,11 @@ defmodule Platser.Map.Poi do
 
   actions do
     defaults [:read]
+
+    read :list_by_event do
+      argument :event_id, :uuid, allow_nil?: false
+      filter expr(event_id == ^arg(:event_id))
+    end
   end
 
   policies do

@@ -1,6 +1,12 @@
 import Config
 config :ash, policies: [show_policy_breakdowns?: true]
 
+# PMTiles source for development. Download a regional extract from
+# https://protomaps.com/builds or use the public sample below (New Zealand).
+config :platser,
+       :pmtiles_url,
+       "pmtiles://https://r2-public.protomaps.com/protomaps-sample-datasets/nz.pmtiles"
+
 # Configure your database
 config :platser, Platser.Repo,
   username: "postgres",

@@ -20,6 +20,27 @@ defmodule Platser.Events.Membership do
       change relate_actor(:user)
       change Platser.Events.Changes.SetEventByJoinCode
     end
+
+    create :create_admin do
+      description "Internal: create an admin membership for the event creator. Call with authorize?: false."
+      accept []
+      argument :event_id, :uuid, allow_nil?: false
+      argument :user_id, :uuid, allow_nil?: false
+
+      change set_attribute(:role, :admin)
+
+      change fn changeset, _ ->
+        changeset
+        |> Ash.Changeset.force_change_attribute(
+          :event_id,
+          Ash.Changeset.get_argument(changeset, :event_id)
+        )
+        |> Ash.Changeset.force_change_attribute(
+          :user_id,
+          Ash.Changeset.get_argument(changeset, :user_id)
+        )
+      end
+    end
   end
 
   policies do
