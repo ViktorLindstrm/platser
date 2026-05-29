@@ -17,6 +17,10 @@ defmodule Platser.Map.Geofence do
       argument :event_id, :uuid, allow_nil?: false
       filter expr(event_id == ^arg(:event_id))
     end
+
+    destroy :destroy do
+      primary? true
+    end
   end
 
   policies do
@@ -26,6 +30,11 @@ defmodule Platser.Map.Geofence do
                        (visibility == :public or creator_id == ^actor(:id) or
                           exists(event.memberships, user_id == ^actor(:id) and role == :admin))
                    )
+    end
+
+    policy action_type(:destroy) do
+      authorize_if expr(creator_id == ^actor(:id))
+      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
     end
   end
 

@@ -13,6 +13,13 @@ defmodule Platser.Events.Membership do
   actions do
     defaults [:read]
 
+    read :list_for_event do
+      description "List all memberships for an event. Requires actor to be an event member."
+      argument :event_id, :uuid, allow_nil?: false
+      filter expr(event_id == ^arg(:event_id))
+      prepare build(sort: [joined_at: :asc], load: [:user])
+    end
+
     create :join do
       description "Join an event via its invite join code."
       argument :join_code, :string, allow_nil?: false
@@ -49,6 +56,10 @@ defmodule Platser.Events.Membership do
                      user_id == ^actor(:id) or
                        exists(event.memberships, user_id == ^actor(:id) and role == :admin)
                    )
+    end
+
+    policy action(:list_for_event) do
+      authorize_if expr(exists(event.memberships, user_id == ^actor(:id)))
     end
 
     policy action(:join) do

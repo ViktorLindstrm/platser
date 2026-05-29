@@ -35,37 +35,35 @@ defmodule PlatserWeb.Layouts do
 
   def app(assigns) do
     ~H"""
-    <header class="navbar px-4 sm:px-6 lg:px-8">
-      <div class="flex-1">
-        <a href="/" class="flex-1 flex w-fit items-center gap-2">
-          <img src={~p"/images/logo.svg"} width="36" />
-          <span class="text-sm font-semibold">v{Application.spec(:phoenix, :vsn)}</span>
-        </a>
-      </div>
-      <div class="flex-none">
-        <ul class="flex flex-column px-1 space-x-4 items-center">
-          <li>
-            <a href="https://phoenixframework.org/" class="btn btn-ghost">Website</a>
-          </li>
-          <li>
-            <a href="https://github.com/phoenixframework/phoenix" class="btn btn-ghost">GitHub</a>
-          </li>
-          <li>
-            <.theme_toggle />
-          </li>
-          <li>
-            <a href="https://hexdocs.pm/phoenix/overview.html" class="btn btn-primary">
-              Get Started <span aria-hidden="true">&rarr;</span>
-            </a>
-          </li>
-        </ul>
+    <header class="sticky top-0 z-30 bg-base-100/80 backdrop-blur-md border-b border-base-200">
+      <div class="max-w-5xl mx-auto px-4 sm:px-6 flex items-center justify-between h-14">
+        <.link navigate={~p"/"} class="flex items-center gap-2 font-bold text-base-content">
+          <.icon name="hero-map-pin" class="w-5 h-5 text-primary" />
+          <span class="text-base">Platser</span>
+        </.link>
+        <div class="flex items-center gap-3">
+          <.theme_toggle />
+          <%= if @current_scope do %>
+            <.link
+              navigate={~p"/events"}
+              class="text-sm text-base-content/70 hover:text-base-content transition-colors"
+            >
+              My Events
+            </.link>
+            <.link
+              href={~p"/sign-out"}
+              method="delete"
+              class="text-sm text-base-content/70 hover:text-base-content transition-colors"
+            >
+              Sign out
+            </.link>
+          <% end %>
+        </div>
       </div>
     </header>
 
-    <main class="px-4 py-20 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-2xl space-y-4">
-        {render_slot(@inner_block)}
-      </div>
+    <main class="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+      {render_slot(@inner_block)}
     </main>
 
     <.flash_group flash={@flash} />

@@ -39,6 +39,9 @@ defmodule PlatserWeb.Router do
     scope "/", PlatserWeb do
       pipe_through :browser
 
+      live "/events", Events.IndexLive
+      live "/events/new", Events.NewLive
+      live "/events/:id/dashboard", Events.DashboardLive
       live "/join/:code", Events.JoinLive
       live "/events/:event_id/map", MapLive
     end

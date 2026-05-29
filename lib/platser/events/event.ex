@@ -21,6 +21,12 @@ defmodule Platser.Events.Event do
       change Platser.Events.Changes.CreateAdminMembership
     end
 
+    read :list_for_user do
+      description "List all events the current actor is a member of."
+      filter expr(exists(memberships, user_id == ^actor(:id)))
+      prepare build(sort: [starts_at: :asc], load: [:memberships])
+    end
+
     read :get_by_join_code do
       description "Look up an event by its invite join code. Any authenticated user may call this."
       get? true
@@ -42,6 +48,10 @@ defmodule Platser.Events.Event do
 
     policy action(:read) do
       authorize_if expr(exists(memberships, user_id == ^actor(:id)))
+    end
+
+    policy action(:list_for_user) do
+      authorize_if actor_present()
     end
 
     policy action(:get_by_join_code) do
