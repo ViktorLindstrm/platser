@@ -120,3 +120,19 @@
 }
 
 /* This file is for your main application CSS */
+
+/* Map item hover tooltip */
+.poi-hover-popup .maplibregl-popup-content {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2937;
+  background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+}
+
+.poi-hover-popup .maplibregl-popup-tip {
+  display: none;
+}

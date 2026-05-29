@@ -129,6 +129,7 @@ export default {
     this.pickMode = false
     this.drawMode = false
     this.drawVertices = []
+    this.hoverPopup = null
 
     // Live location sharing state
     this.memberMarkers = {}
@@ -169,6 +170,7 @@ export default {
       this.mapReady = true
       this.pendingCallbacks.forEach(fn => fn())
       this.pendingCallbacks = []
+      this._setupHoverAffordance()
     })
 
     this.map.on("click", e => {
@@ -319,6 +321,7 @@ export default {
 
   _enablePickMode() {
     this.pickMode = true
+    this.hoverPopup?.remove()
     this.el.style.cursor = "crosshair"
     if (this.map) this.map.getCanvas().style.cursor = "crosshair"
   },
@@ -332,6 +335,7 @@ export default {
   _enableDrawMode() {
     this.drawMode = true
     this.drawVertices = []
+    this.hoverPopup?.remove()
     this.el.style.cursor = "crosshair"
     this.map.getCanvas().style.cursor = "crosshair"
     this._setupDrawPreviewLayers()
@@ -343,6 +347,45 @@ export default {
     this.el.style.cursor = ""
     this.map.getCanvas().style.cursor = ""
     this._clearDrawPreview()
+  },
+
+  _setupHoverAffordance() {
+    const canvas = this.map.getCanvas()
+    const interactiveLayers = ["poi-circles", "geofence-fills", "geofence-lines"]
+
+    this.hoverPopup = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      offset: 14,
+      className: "poi-hover-popup",
+    })
+
+    this.map.on("mousemove", e => {
+      if (this.pickMode || this.drawMode) {
+        this.hoverPopup.remove()
+        return
+      }
+
+      const features = this.map.queryRenderedFeatures(e.point, {layers: interactiveLayers})
+
+      if (features.length > 0) {
+        canvas.style.cursor = "pointer"
+        const name = features[0].properties?.name
+        if (name) {
+          this.hoverPopup.setLngLat(e.lngLat).setText(name).addTo(this.map)
+        } else {
+          this.hoverPopup.remove()
+        }
+      } else {
+        canvas.style.cursor = ""
+        this.hoverPopup.remove()
+      }
+    })
+
+    this.map.on("mouseout", () => {
+      if (!this.pickMode && !this.drawMode) canvas.style.cursor = ""
+      this.hoverPopup.remove()
+    })
   },
 
   _focusMapObject(payload) {
@@ -600,6 +643,7 @@ export default {
     if (this._onSetBoundsClick) {
       document.removeEventListener("click", this._onSetBoundsClick)
     }
+    this.hoverPopup?.remove()
     this.map?.remove()
   },
 }
