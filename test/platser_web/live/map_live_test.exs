@@ -396,7 +396,7 @@ defmodule PlatserWeb.MapLiveTest do
 
     render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
 
-    assert has_element?(view, "#poi-photo-strip")
+    assert has_element?(view, "#map-item-photo-strip")
     assert has_element?(view, "#photo-#{attachment.id}")
   end
 
@@ -411,7 +411,7 @@ defmodule PlatserWeb.MapLiveTest do
     render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
 
     assert has_element?(view, "#map-item-drawer")
-    refute has_element?(view, "#poi-photo-strip")
+    refute has_element?(view, "#map-item-photo-strip")
   end
 
   test "photo strip survives publish action on inspection drawer", %{conn: conn} do
@@ -425,12 +425,12 @@ defmodule PlatserWeb.MapLiveTest do
 
     render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
 
-    assert has_element?(view, "#poi-photo-strip")
+    assert has_element?(view, "#map-item-photo-strip")
 
     render_click(element(view, "#map-item-publish-btn"))
 
     assert has_element?(view, "#map-item-drawer")
-    assert has_element?(view, "#poi-photo-strip")
+    assert has_element?(view, "#map-item-photo-strip")
     assert has_element?(view, "#photo-#{attachment.id}")
   end
 end

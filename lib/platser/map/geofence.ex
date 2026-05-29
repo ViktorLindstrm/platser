@@ -20,7 +20,7 @@ defmodule Platser.Map.Geofence do
 
     create :create do
       primary? true
-      accept [:name, :purpose, :geometry, :color, :event_id]
+      accept [:name, :description, :comment, :purpose, :geometry, :color, :event_id]
       change set_attribute(:visibility, :private)
       change relate_actor(:creator)
 
@@ -51,7 +51,7 @@ defmodule Platser.Map.Geofence do
     end
 
     update :update do
-      accept [:name, :purpose, :color]
+      accept [:name, :description, :comment, :purpose, :color]
       require_atomic? false
 
       validate attribute_equals(:visibility, :private) do
@@ -64,7 +64,7 @@ defmodule Platser.Map.Geofence do
     end
 
     update :update_metadata do
-      accept [:name, :color]
+      accept [:name, :description, :comment, :color]
       require_atomic? false
 
       validate fn changeset, _ ->
@@ -137,6 +137,8 @@ defmodule Platser.Map.Geofence do
     end
 
     attribute :published_at, :utc_datetime
+    attribute :description, :string
+    attribute :comment, :string
   end
 
   relationships do
@@ -146,6 +148,10 @@ defmodule Platser.Map.Geofence do
 
     belongs_to :creator, Platser.Accounts.User do
       allow_nil? false
+    end
+
+    has_many :attachments, Platser.Media.Attachment do
+      destination_attribute :geofence_id
     end
   end
 

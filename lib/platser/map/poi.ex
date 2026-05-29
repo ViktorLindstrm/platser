@@ -52,7 +52,7 @@ defmodule Platser.Map.Poi do
     end
 
     update :update_metadata do
-      accept [:name, :description]
+      accept [:name, :description, :comment]
       require_atomic? false
     end
 
@@ -103,6 +103,8 @@ defmodule Platser.Map.Poi do
     end
 
     attribute :description, :string
+
+    attribute :comment, :string
 
     attribute :category, :atom do
       allow_nil? false

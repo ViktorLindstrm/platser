@@ -51,20 +51,49 @@ This means:
 - For the publish path, `selected_map_object` is populated with the *published* version of the item
   (the post-publish result), ensuring the correct status badge and hidden publish button are shown.
 
+## Amendment: Unified drawer and comment field (task #32)
+
+**Status: Implemented**
+
+### Unified drawer layout for POI and geofence
+
+The inspection drawer shows an identical structure for both POIs and geofences:
+
+1. **Header** — kind icon, kind label, item name, close button
+2. **Status badges** — visibility (draft/public) and kind badge
+3. **Description** — shown for both POI and geofence when present (previously POI-only)
+4. **Photo gallery** — shown for both kinds when attachments are present (previously POI-only)
+5. **Metadata grid** — kind-specific fields (POI: category + coordinates; geofence: purpose + vertex count)
+6. **Comment** — editable multi-line field for inline notes (see below)
+7. **Action bar** — Focus, Publish, Edit, Delete buttons (unchanged)
+
+### Comment field replaces Review section
+
+The static "Review" section (which displayed "This item is public and visible…" copy) is removed.
+
+In its place, an editable **Comment** field is rendered directly in the drawer:
+
+- Displayed as a `<textarea>` for both POI and geofence items with id `map-item-comment`.
+- Saved on blur via a `save_map_object_comment` LiveView event (no debounced change, to avoid cursor-jump).
+- Stored in a new `comment` attribute (`allow_nil?: true, :string`) on both `Poi` and `Geofence` resources.
+- The textarea is `disabled` for non-managers (`@selected_map_object_can_manage == false`).
+- No separate publish step — the comment is always saved as a plain mutable field and is not gated by visibility.
+- Draft/public status information is still surfaced via the existing status badge, not as freeform text.
+
 ## Photo gallery in inspection drawer
 
 The `selected_map_object` assign includes an `attachments` field: a list of `Media.Attachment`
-records for POIs, and an empty list for geofences.
+records loaded for both POIs and geofences.
 
-- `load_selected_map_object/3` calls `load_poi_attachments/2` when selecting a POI.
+- `load_selected_map_object/3` calls `load_poi_attachments/2` when selecting a POI, and `load_geofence_attachments/2` when selecting a geofence.
 - `select_map_object/3` does the same for the post-creation auto-inspect path.
 - `publish_selected_map_object` now uses `select_map_object/3` so attachments are reloaded
   after publishing (keeping the gallery visible after status transitions).
-- A horizontally-scrolling photo strip is rendered inside the drawer when
-  `@selected_map_object.attachments != []` and `kind == :poi`.
+- A horizontally-scrolling photo strip (id `map-item-photo-strip`) is rendered inside the drawer when
+  `@selected_map_object.attachments != []` for either kind.
 - Photos link to their stored path and open in a new tab. File access is not gated
   by an authenticated route — the `/uploads/...` paths are served by `Plug.Static`.
   This is an acceptable trade-off for local dev (per ADR-0009); paths include a UUID
   prefix making them opaque to guessing. Production deployments should replace
   `Plug.Static` serving with signed CDN URLs.
-- Attachments in `list_by_poi` are sorted by `inserted_at asc` for deterministic order.
+- Attachments in `list_by_poi` and `list_by_geofence` are sorted by `inserted_at asc` for deterministic order.

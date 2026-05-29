@@ -72,3 +72,41 @@ Elixir 1.18+ ships a built-in `JSON` module, so the `geo` hex package conditiona
 - **Property tests**: `test/platser/geofence_property_test.exs` covers vertex count rejection, valid purpose enumeration, publish idempotency, and hex colour validation.
 - **Geometry type fix**: `cast_input` and `cast_stored` in `Platser.Types.Geometry` now handle GeoJSON maps (in addition to native PostGIS values) to survive Ash's internal JSON serialisation round-trip.
 - **Mutually exclusive modes**: POI pick mode and geofence draw mode cannot be active simultaneously; one cancels the other.
+
+## Amendment: Form field parity with POI (task #32)
+
+**Status: Implemented**
+
+To make the boundary creation experience consistent with POI creation:
+
+### 7. Geofence form adds description and photo upload
+
+The geofence creation/edit form gains two fields that match the POI form:
+
+- **Description** — optional free-text `textarea` (`description` attribute, `allow_nil?: true`).
+- **Photo upload** — same `allow_upload(:photos, …)` LiveView upload configuration as POIs; attachments are stored via `Media.Attachment` and associated with the geofence record via `geofence_id` FK.
+
+The `<.live_file_input>` is conditionally rendered only when the respective form is active (`@poi_step == :editing` / `@geofence_step == :editing`) to prevent duplicate DOM IDs from both forms being present simultaneously.
+
+Geofences keep their existing unique fields (purpose radio group, colour picker). Field order in the sheet:
+
+1. Polygon indicator / vertex count
+2. Name *
+3. Description
+4. Photos (new geofences only)
+5. Purpose (hidden when editing a published geofence)
+6. Colour
+
+### 8. Data model additions
+
+- `description` column added to `geofences` table (`:string`, nullable).
+- `comment` column added to `geofences` and `pois` tables (`:string`, nullable).
+- `geofence_id` FK column added to `media_attachments` table (`references :geofences`, `on_delete: :delete_all`).
+- `poi_id` made nullable in `media_attachments` to support the exclusive-parent model.
+- A DB check constraint `exactly_one_parent` enforces `(poi_id IS NOT NULL AND geofence_id IS NULL) OR (poi_id IS NULL AND geofence_id IS NOT NULL)`.
+- `has_many :attachments` added to `Platser.Map.Geofence` with `destination_attribute: :geofence_id`.
+- `Media.Attachment` gains two new Ash actions: `list_by_geofence` and `create_for_geofence`.
+- `Platser.Media` domain gains `list_attachments_for_geofence/2` and `create_geofence_attachment/2` public functions.
+- Photo upload paths use the geofence ID as the subdirectory (same pattern as POI: `/uploads/<geofence_id>/<uuid>_filename`).
+- All changes are in incremental migration `priv/repo/migrations/20260529202707_task32_geofence_ux_parity.exs`.
+- Property tests in `test/platser/geofence_property_test.exs` extended to cover: description stored on create, comment persisted via `update_metadata`, attachment XOR-parent constraint, and geofence attachment list.

@@ -92,6 +92,7 @@ defmodule PlatserWeb.MapLive do
             |> assign(:geofence_vertices, [])
             |> assign(:geofence_geometry, nil)
             |> assign(:geofence_name, "")
+            |> assign(:geofence_description, "")
             |> assign(:geofence_purpose, "boundary")
             |> assign(:geofence_color, Map.fetch!(@purpose_colors, "boundary"))
             |> assign(:geofence_errors, [])
@@ -426,6 +427,7 @@ defmodule PlatserWeb.MapLive do
          |> assign(:geofence_vertices, [])
          |> assign(:geofence_geometry, geofence.geometry)
          |> assign(:geofence_name, geofence.name)
+         |> assign(:geofence_description, geofence.description || "")
          |> assign(:geofence_purpose, to_string(geofence.purpose))
          |> assign(:geofence_color, geofence.color)
          |> assign(:geofence_errors, [])}
@@ -483,6 +485,7 @@ defmodule PlatserWeb.MapLive do
      |> assign(:geofence_vertices, [])
      |> assign(:geofence_geometry, nil)
      |> assign(:geofence_name, "")
+     |> assign(:geofence_description, "")
      |> assign(:geofence_purpose, "boundary")
      |> assign(:geofence_color, Map.fetch!(@purpose_colors, "boundary"))
      |> assign(:geofence_errors, [])
@@ -491,6 +494,33 @@ defmodule PlatserWeb.MapLive do
 
   def handle_event("cancel_geofence_form", _params, socket) do
     {:noreply, reset_geofence_form(socket)}
+  end
+
+  def handle_event("save_map_object_comment", %{"comment" => comment}, socket) do
+    actor = socket.assigns.current_user
+
+    case socket.assigns.selected_map_object do
+      %{kind: :poi, item: %Poi{} = poi} ->
+        case PlatserMap.update_poi_metadata(poi, %{comment: comment}, actor: actor) do
+          {:ok, updated} ->
+            {:noreply, select_map_object(socket, :poi, updated)}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not save comment.")}
+        end
+
+      %{kind: :geofence, item: %Geofence{} = geofence} ->
+        case PlatserMap.update_geofence_metadata(geofence, %{comment: comment}, actor: actor) do
+          {:ok, updated} ->
+            {:noreply, select_map_object(socket, :geofence, updated)}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not save comment.")}
+        end
+
+      nil ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("publish_selected_map_object", _params, socket) do
@@ -630,6 +660,7 @@ defmodule PlatserWeb.MapLive do
     {:noreply,
      socket
      |> assign(:geofence_name, params["name"] || "")
+     |> assign(:geofence_description, params["description"] || "")
      |> assign(:geofence_purpose, purpose)
      |> assign(:geofence_color, color)}
   end
@@ -877,8 +908,48 @@ defmodule PlatserWeb.MapLive do
   end
 
   @spec uploads_dir_for(Ecto.UUID.t()) :: String.t()
-  defp uploads_dir_for(poi_id) do
-    Application.app_dir(:platser, "priv/static/uploads/#{poi_id}")
+  defp uploads_dir_for(owner_id) do
+    Application.app_dir(:platser, "priv/static/uploads/#{owner_id}")
+  end
+
+  @spec handle_photo_uploads_for_geofence(
+          Phoenix.LiveView.Socket.t(),
+          Geofence.t(),
+          Platser.Accounts.User.t()
+        ) :: [String.t()]
+  defp handle_photo_uploads_for_geofence(socket, geofence, actor) do
+    dir = uploads_dir_for(geofence.id)
+    File.mkdir_p!(dir)
+
+    consume_uploaded_entries(socket, :photos, fn %{path: tmp_path}, entry ->
+      stored_filename = "#{Ecto.UUID.generate()}_#{Path.basename(entry.client_name)}"
+      dest = Path.join(dir, stored_filename)
+
+      case File.cp(tmp_path, dest) do
+        :ok ->
+          url_path = "/uploads/#{geofence.id}/#{stored_filename}"
+
+          Platser.Media.create_geofence_attachment(
+            %{
+              filename: entry.client_name,
+              stored_filename: stored_filename,
+              content_type: entry.client_type,
+              path: url_path,
+              geofence_id: geofence.id
+            },
+            actor: actor,
+            authorize?: false
+          )
+
+          {:ok, url_path}
+
+        {:error, reason} ->
+          require Logger
+          Logger.warning("Failed to copy upload #{entry.client_name}: #{inspect(reason)}")
+          {:ok, nil}
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
   end
 
   @spec format_ash_errors(Ash.Error.Invalid.t()) :: [{String.t(), String.t()}]
@@ -898,6 +969,7 @@ defmodule PlatserWeb.MapLive do
   @spec reset_poi_form(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp reset_poi_form(socket) do
     socket
+    |> cancel_all_photo_uploads()
     |> assign(:poi_step, :idle)
     |> assign(:poi_location, nil)
     |> assign(:poi_name, "")
@@ -912,16 +984,26 @@ defmodule PlatserWeb.MapLive do
   @spec reset_geofence_form(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp reset_geofence_form(socket) do
     socket
+    |> cancel_all_photo_uploads()
     |> assign(:geofence_step, :idle)
     |> assign(:geofence_vertices, [])
     |> assign(:geofence_geometry, nil)
     |> assign(:geofence_name, "")
+    |> assign(:geofence_description, "")
     |> assign(:geofence_purpose, "boundary")
     |> assign(:geofence_color, Map.fetch!(@purpose_colors, "boundary"))
     |> assign(:geofence_errors, [])
     |> assign(:editing_geofence_id, nil)
     |> assign(:editing_geofence_published, false)
     |> push_event("disable_draw_mode", %{})
+  end
+
+  @spec cancel_all_photo_uploads(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp cancel_all_photo_uploads(socket) do
+    socket.assigns.uploads.photos.entries
+    |> Enum.reduce(socket, fn entry, acc ->
+      cancel_upload(acc, :photos, entry.ref)
+    end)
   end
 
   @spec load_selected_map_object(String.t(), String.t(), Platser.Accounts.User.t()) ::
@@ -939,7 +1021,12 @@ defmodule PlatserWeb.MapLive do
   defp load_selected_map_object("geofence", id, actor) do
     case PlatserMap.get_geofence(id, actor: actor) do
       {:ok, %Geofence{} = geofence} ->
-        {:ok, %{kind: :geofence, item: geofence, attachments: []}}
+        {:ok,
+         %{
+           kind: :geofence,
+           item: geofence,
+           attachments: load_geofence_attachments(geofence.id, actor)
+         }}
 
       _ ->
         {:error, :not_found}
@@ -960,6 +1047,26 @@ defmodule PlatserWeb.MapLive do
       {:error, reason} ->
         require Logger
         Logger.warning("Failed to load attachments for POI #{poi_id}: #{inspect(reason)}")
+        []
+    end
+  end
+
+  @spec load_geofence_attachments(Ecto.UUID.t(), Platser.Accounts.User.t()) :: [Attachment.t()]
+  defp load_geofence_attachments(geofence_id, actor) do
+    case Media.list_attachments_for_geofence(geofence_id, actor: actor) do
+      {:ok, attachments} ->
+        attachments
+
+      {:error, %Ash.Error.Forbidden{}} ->
+        []
+
+      {:error, reason} ->
+        require Logger
+
+        Logger.warning(
+          "Failed to load attachments for Geofence #{geofence_id}: #{inspect(reason)}"
+        )
+
         []
     end
   end
@@ -1000,9 +1107,10 @@ defmodule PlatserWeb.MapLive do
         ) :: Phoenix.LiveView.Socket.t()
   defp select_map_object(socket, :geofence, %Geofence{} = geofence) do
     actor = socket.assigns.current_user
+    attachments = load_geofence_attachments(geofence.id, actor)
 
     socket
-    |> assign(:selected_map_object, %{kind: :geofence, item: geofence, attachments: []})
+    |> assign(:selected_map_object, %{kind: :geofence, item: geofence, attachments: attachments})
     |> assign(:selected_map_object_can_manage, can_manage_selected_map_object?(geofence, actor))
   end
 
@@ -1052,6 +1160,7 @@ defmodule PlatserWeb.MapLive do
       else
         geofence_attrs = %{
           name: name,
+          description: params["description"],
           color: params["color"] || socket.assigns.geofence_color
         }
 
@@ -1071,6 +1180,7 @@ defmodule PlatserWeb.MapLive do
           nil ->
             geofence_params = %{
               name: String.trim(params["name"]),
+              description: params["description"],
               purpose: String.to_existing_atom(params["purpose"]),
               color: params["color"],
               geometry: geometry,
@@ -1082,6 +1192,7 @@ defmodule PlatserWeb.MapLive do
           geofence_id ->
             geofence_attrs = %{
               name: String.trim(params["name"]),
+              description: params["description"],
               purpose: String.to_existing_atom(params["purpose"]),
               color: params["color"]
             }
@@ -1101,6 +1212,8 @@ defmodule PlatserWeb.MapLive do
   defp do_create_geofence(params, publish?, socket, actor) do
     case PlatserMap.create_geofence(params, actor: actor) do
       {:ok, geofence} ->
+        _uploaded_paths = handle_photo_uploads_for_geofence(socket, geofence, actor)
+
         socket =
           if publish? do
             case PlatserMap.publish_geofence(geofence, actor: actor) do
@@ -1170,6 +1283,8 @@ defmodule PlatserWeb.MapLive do
   defp do_update_geofence_metadata(geofence, attrs, socket, actor) do
     case PlatserMap.update_geofence_metadata(geofence, attrs, actor: actor) do
       {:ok, updated} ->
+        _uploaded_paths = handle_photo_uploads_for_geofence(socket, updated, actor)
+
         Phoenix.PubSub.broadcast(
           Platser.PubSub,
           "event:#{updated.event_id}:map_objects",
@@ -1202,6 +1317,8 @@ defmodule PlatserWeb.MapLive do
   defp do_update_geofence_draft(geofence, attrs, publish?, socket, actor) do
     case PlatserMap.update_geofence(geofence, attrs, actor: actor) do
       {:ok, updated} ->
+        _uploaded_paths = handle_photo_uploads_for_geofence(socket, updated, actor)
+
         socket =
           if publish? do
             case PlatserMap.publish_geofence(updated, actor: actor) do
@@ -1562,8 +1679,7 @@ defmodule PlatserWeb.MapLive do
                 </div>
               <% end %>
 
-              <%!-- Photos (new POI only) --%>
-              <%= if is_nil(@editing_poi_id) do %>
+              <%= if is_nil(@editing_poi_id) and @poi_step == :editing do %>
                 <div>
                   <label class="block text-sm font-medium text-gray-700 mb-1">
                     Photos <span class="text-gray-400 font-normal">(optional, up to 5)</span>
@@ -1717,6 +1833,67 @@ defmodule PlatserWeb.MapLive do
                   class="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition text-sm"
                 />
               </div>
+
+              <%!-- Description --%>
+              <div>
+                <label
+                  for="geofence-description"
+                  class="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Description
+                </label>
+                <textarea
+                  id="geofence-description"
+                  name="geofence[description]"
+                  rows="2"
+                  placeholder="Optional — describe this area…"
+                  class="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition text-sm resize-none"
+                >{@geofence_description}</textarea>
+              </div>
+
+              <%!-- Photos (new geofence only) --%>
+              <%= if is_nil(@editing_geofence_id) and @geofence_step == :editing do %>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">
+                    Photos <span class="text-gray-400 font-normal">(optional, up to 5)</span>
+                  </label>
+                  <div class="flex items-center gap-2">
+                    <label
+                      for={@uploads.photos.ref}
+                      class="flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-gray-300 bg-gray-50 text-sm text-gray-600 hover:bg-gray-100 cursor-pointer transition-colors"
+                    >
+                      <.icon name="hero-camera" class="w-4 h-4" /> Add photos
+                      <.live_file_input upload={@uploads.photos} class="sr-only" />
+                    </label>
+                    <%= if length(@uploads.photos.entries) > 0 do %>
+                      <span class="text-xs text-gray-500">
+                        {length(@uploads.photos.entries)} selected
+                      </span>
+                    <% end %>
+                  </div>
+                  <%!-- Upload previews --%>
+                  <%= if length(@uploads.photos.entries) > 0 do %>
+                    <div class="mt-2 flex gap-2 flex-wrap">
+                      <%= for entry <- @uploads.photos.entries do %>
+                        <div class="relative">
+                          <.live_img_preview
+                            entry={entry}
+                            class="w-16 h-16 object-cover rounded-lg"
+                          />
+                          <button
+                            type="button"
+                            phx-click="cancel_upload"
+                            phx-value-ref={entry.ref}
+                            class="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center"
+                          >
+                            <.icon name="hero-x-mark" class="w-3 h-3 text-white" />
+                          </button>
+                        </div>
+                      <% end %>
+                    </div>
+                  <% end %>
+                </div>
+              <% end %>
 
               <%!-- Purpose (hidden when editing a published geofence) --%>
               <%= if not @editing_geofence_published do %>
@@ -1892,15 +2069,15 @@ defmodule PlatserWeb.MapLive do
                 </span>
               </div>
 
-              <%= if kind == :poi and item.description && item.description != "" do %>
+              <%= if item.description && item.description != "" do %>
                 <div>
                   <p class="text-sm text-gray-600 leading-relaxed">{item.description}</p>
                 </div>
               <% end %>
 
-              <%!-- Photo gallery strip (POI only) --%>
-              <%= if kind == :poi and @selected_map_object.attachments != [] do %>
-                <div id="poi-photo-strip">
+              <%!-- Photo gallery strip --%>
+              <%= if @selected_map_object.attachments != [] do %>
+                <div id="map-item-photo-strip">
                   <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
                     Photos
                   </p>
@@ -1964,15 +2141,19 @@ defmodule PlatserWeb.MapLive do
 
               <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
                 <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                  Review
+                  Comment
                 </p>
-                <p class="text-sm text-gray-700 leading-relaxed">
-                  <%= if MapInspection.resource_status(item) == :published do %>
-                    This item is public and visible to event members.
-                  <% else %>
-                    This item is still a draft and only visible to you and event admins.
-                  <% end %>
-                </p>
+                <textarea
+                  id="map-item-comment"
+                  name="comment"
+                  rows="3"
+                  phx-blur="save_map_object_comment"
+                  disabled={not @selected_map_object_can_manage}
+                  placeholder={
+                    if @selected_map_object_can_manage, do: "Add a comment…", else: "No comment yet"
+                  }
+                  class="w-full resize-none bg-transparent text-sm text-gray-700 leading-relaxed focus:outline-none disabled:cursor-default disabled:text-gray-500 placeholder:text-gray-400"
+                >{item.comment || ""}</textarea>
               </div>
             </div>
 

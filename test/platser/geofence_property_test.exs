@@ -322,4 +322,216 @@ defmodule Platser.GeofencePropertyTest do
       end
     end
   end
+
+  describe "description field" do
+    property "description is stored and retrieved unchanged when provided" do
+      check all(
+              description <- StreamData.string(:printable, min_length: 1, max_length: 500),
+              max_runs: 25
+            ) do
+        {user, event} = create_event_with_member()
+
+        polygon = %Geo.Polygon{
+          coordinates: [
+            [{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {0.0, 0.0}]
+          ],
+          srid: 4326
+        }
+
+        assert {:ok, geofence} =
+                 PlatserMap.create_geofence(
+                   %{
+                     name: "Desc Test",
+                     purpose: :boundary,
+                     color: "#3B82F6",
+                     geometry: polygon,
+                     event_id: event.id,
+                     description: description
+                   },
+                   actor: user
+                 )
+
+        assert geofence.description == description
+      end
+    end
+
+    property "description defaults to nil when not provided" do
+      check all(polygon <- valid_polygon_gen(), max_runs: 15) do
+        {user, event} = create_event_with_member()
+
+        assert {:ok, geofence} =
+                 PlatserMap.create_geofence(
+                   %{
+                     name: "No Desc",
+                     purpose: :boundary,
+                     color: "#3B82F6",
+                     geometry: polygon,
+                     event_id: event.id
+                   },
+                   actor: user
+                 )
+
+        assert is_nil(geofence.description)
+      end
+    end
+  end
+
+  describe "comment field" do
+    property "comment set via update_metadata is persisted and retrieved" do
+      check all(
+              comment <- StreamData.string(:printable, min_length: 1, max_length: 1000),
+              max_runs: 25
+            ) do
+        {user, event} = create_event_with_member()
+
+        polygon = %Geo.Polygon{
+          coordinates: [
+            [{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {0.0, 0.0}]
+          ],
+          srid: 4326
+        }
+
+        {:ok, geofence} =
+          PlatserMap.create_geofence(
+            %{
+              name: "Comment Test",
+              purpose: :boundary,
+              color: "#3B82F6",
+              geometry: polygon,
+              event_id: event.id
+            },
+            actor: user
+          )
+
+        assert {:ok, updated} =
+                 PlatserMap.update_geofence_metadata(
+                   geofence,
+                   %{comment: comment},
+                   actor: user
+                 )
+
+        assert updated.comment == comment
+
+        assert {:ok, fetched} = PlatserMap.get_geofence(geofence.id, actor: user)
+        assert fetched.comment == comment
+      end
+    end
+
+    property "comment can be cleared by setting nil" do
+      check all(polygon <- valid_polygon_gen(), max_runs: 10) do
+        {user, event} = create_event_with_member()
+
+        {:ok, geofence} =
+          PlatserMap.create_geofence(
+            %{
+              name: "Comment Clear",
+              purpose: :boundary,
+              color: "#3B82F6",
+              geometry: polygon,
+              event_id: event.id,
+              comment: "initial comment"
+            },
+            actor: user
+          )
+
+        assert {:ok, updated} =
+                 PlatserMap.update_geofence_metadata(
+                   geofence,
+                   %{comment: nil},
+                   actor: user
+                 )
+
+        assert is_nil(updated.comment)
+      end
+    end
+  end
+
+  describe "geofence attachments" do
+    property "attachments created for a geofence are listed back" do
+      check all(
+              filename <- StreamData.string(:alphanumeric, min_length: 3, max_length: 40),
+              max_runs: 15
+            ) do
+        {user, event} = create_event_with_member()
+
+        polygon = %Geo.Polygon{
+          coordinates: [
+            [{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {0.0, 0.0}]
+          ],
+          srid: 4326
+        }
+
+        {:ok, geofence} =
+          PlatserMap.create_geofence(
+            %{
+              name: "Attachment Test",
+              purpose: :boundary,
+              color: "#3B82F6",
+              geometry: polygon,
+              event_id: event.id
+            },
+            actor: user
+          )
+
+        stored = "#{Ecto.UUID.generate()}_#{filename}.jpg"
+
+        assert {:ok, attachment} =
+                 Platser.Media.create_geofence_attachment(
+                   %{
+                     filename: "#{filename}.jpg",
+                     stored_filename: stored,
+                     content_type: "image/jpeg",
+                     path: "/uploads/#{geofence.id}/#{stored}",
+                     geofence_id: geofence.id
+                   },
+                   actor: user,
+                   authorize?: false
+                 )
+
+        assert attachment.geofence_id == geofence.id
+
+        assert {:ok, attachments} =
+                 Platser.Media.list_attachments_for_geofence(geofence.id, actor: user)
+
+        ids = Enum.map(attachments, & &1.id)
+        assert attachment.id in ids
+      end
+    end
+
+    property "attachments belong to exactly one parent (geofence xor poi)" do
+      check all(polygon <- valid_polygon_gen(), max_runs: 10) do
+        {user, event} = create_event_with_member()
+
+        {:ok, geofence} =
+          PlatserMap.create_geofence(
+            %{
+              name: "XOR Test",
+              purpose: :boundary,
+              color: "#3B82F6",
+              geometry: polygon,
+              event_id: event.id
+            },
+            actor: user
+          )
+
+        stored = "#{Ecto.UUID.generate()}_test.jpg"
+
+        {:ok, attachment} =
+          Platser.Media.create_geofence_attachment(
+            %{
+              filename: "test.jpg",
+              stored_filename: stored,
+              content_type: "image/jpeg",
+              path: "/uploads/#{geofence.id}/#{stored}",
+              geofence_id: geofence.id
+            },
+            actor: user,
+            authorize?: false
+          )
+
+        assert not is_nil(attachment.geofence_id)
+        assert is_nil(attachment.poi_id)
+      end
+    end
+  end
 end
