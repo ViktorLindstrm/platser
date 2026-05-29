@@ -14,7 +14,6 @@ The following must be direct dependencies in `mix.exs` (not just transitive):
 - `{:ash_postgres, "~> 2.9"}` — PostgreSQL data layer; every resource needs
   `data_layer: AshPostgres.DataLayer`
 - `{:ash_phoenix, "~> 2.0"}` — `AshPhoenix.Form` for LiveView form integration
-- `{:ash_storage, "~> 0.1.0"}` — file attachments (see ADR-0009)
 - `{:geo_postgis, "~> 3.7"}` — PostGIS geometry types for Ecto/Ash
 - `{:ash_authentication_phoenix, "~> 2.0"}` — auth routes and LiveView hooks
 
@@ -22,7 +21,7 @@ The following must be direct dependencies in `mix.exs` (not just transitive):
 - `Platser.Accounts` — users, authentication (existing)
 - `Platser.Events` — events, memberships, join codes
 - `Platser.Map` — POIs, geofences, comments
-- `Platser.Media` — blobs and attachments (`ash_storage`; see ADR-0009)
+- `Platser.Media` — attachments (Phoenix LiveView native uploads; see ADR-0009)
 - `Platser.Activity` — activity feed entries
 
 ### Key Resources

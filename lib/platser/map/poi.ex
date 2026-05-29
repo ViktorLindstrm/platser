@@ -18,6 +18,30 @@ defmodule Platser.Map.Poi do
       filter expr(event_id == ^arg(:event_id))
     end
 
+    create :create do
+      primary? true
+      accept [:name, :description, :category, :location, :event_id]
+      change set_attribute(:visibility, :private)
+      change relate_actor(:creator)
+    end
+
+    update :publish do
+      accept []
+      require_atomic? false
+
+      validate attribute_equals(:visibility, :private) do
+        message "POI is already published"
+      end
+
+      change set_attribute(:visibility, :public)
+
+      change fn changeset, _context ->
+        Ash.Changeset.force_change_attribute(changeset, :published_at, DateTime.utc_now())
+      end
+
+      change Platser.Map.Changes.BroadcastPublish
+    end
+
     destroy :destroy do
       primary? true
     end
@@ -30,6 +54,15 @@ defmodule Platser.Map.Poi do
                        (visibility == :public or creator_id == ^actor(:id) or
                           exists(event.memberships, user_id == ^actor(:id) and role == :admin))
                    )
+    end
+
+    policy action_type(:create) do
+      authorize_if expr(exists(event.memberships, user_id == ^actor(:id)))
+    end
+
+    policy action(:publish) do
+      authorize_if expr(creator_id == ^actor(:id))
+      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
     end
 
     policy action_type(:destroy) do
@@ -72,5 +105,7 @@ defmodule Platser.Map.Poi do
     belongs_to :creator, Platser.Accounts.User do
       allow_nil? false
     end
+
+    has_many :attachments, Platser.Media.Attachment
   end
 end

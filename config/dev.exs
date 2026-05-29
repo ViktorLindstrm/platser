@@ -15,6 +15,7 @@ config :platser, Platser.Repo,
   password: "postgres",
   hostname: "localhost",
   database: "platser_dev",
+  types: Platser.PostgresTypes,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10

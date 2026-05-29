@@ -39,8 +39,30 @@ membership set is stored as part of the Presence metadata for the user (see ADR-
 ### Geometry types in Ash/Ecto
 - The Elixir struct types from `geo` are `%Geo.Point{}`, `%Geo.Polygon{}`, etc.
 - The Ecto/Ash column type is `:geometry` provided by `geo_postgis`.
-- In Ash resource attributes, declare: `attribute :location, :geometry` and configure
-  `geo_postgis` as a custom type extension on the `AshPostgres` data layer.
+- In Ash resource attributes, declare: `attribute :location, :geometry`.
+
+#### Required: Postgrex custom types module
+`geo_postgis` requires a `Postgrex.Types.define/3` module **and** `types:` wired into the
+Repo config for geometry encoding/decoding to work. Without this, reads from empty tables
+appear to succeed (no geometry rows to decode), masking the bug until the first INSERT.
+
+Create once in `lib/platser/postgres_types.ex`:
+```elixir
+Postgrex.Types.define(
+  Platser.PostgresTypes,
+  [Geo.PostGIS.Extension | Ecto.Adapters.Postgres.extensions()],
+  json: Jason
+)
+```
+
+And reference it in **all three** Repo configs:
+```elixir
+# config/dev.exs, config/test.exs, config/runtime.exs
+config :platser, Platser.Repo, types: Platser.PostgresTypes
+```
+
+This module is generated at compile time by `Postgrex.Types.define/3` — it will noticeably
+increase compile time (~10s extra) on first build.
 
 ## Consequences
 - **Positive:** Industry-standard spatial database. All spatial operations run in the DB, not

@@ -1,111 +1,59 @@
-# ADR-0009: File Storage — ash_storage
+# ADR-0009: File Storage — Phoenix LiveView Native Uploads
 
 ## Status
-Accepted
+Amended (supersedes the ash_storage and waffle approaches previously considered)
 
 ## Context
 POIs support rich media: photos uploaded by event participants. We need a file storage
 strategy that works for local development and can migrate to cloud storage later.
-We want to stay within the Ash ecosystem rather than using Waffle (a non-Ash library).
+
+Two earlier approaches were evaluated:
+1. **`ash_storage`** — The official Ash extension was not yet on Hex.pm and had an
+   unstable API at the time of implementation.
+2. **`waffle` + `waffle_ecto`** — Waffle is not Ash-native; integrating it requires wrapping
+   Ecto changesets in Ash change modules, adding complexity and a non-Ash dependency.
 
 ## Decision
-Use **`ash_storage`** (`ash-project/ash_storage`) — the official Ash extension for file
-storage and attachments.
+Use **Phoenix LiveView's native file upload system** (`allow_upload` / `consume_uploaded_entries`)
+with plain `File.cp` for local disk storage.
 
-- `{:ash_storage, "~> 0.1.0"}` added to `mix.exs`.
-- Provides `AshStorage.BlobResource`, `AshStorage.AttachmentResource`, and the `AshStorage`
-  host extension, using a `has_one_attached` / `has_many_attached` DSL familiar from Rails
-  ActiveStorage.
+- No extra Hex dependencies required — Phoenix LiveView ships with first-class upload support.
+- Files are stored at `priv/static/uploads/{poi_id}/{uuid}_{original_filename}`.
+- Phoenix's static plug serves the files at `/uploads/...` in dev; a CDN or object-store proxy
+  serves them in production.
+- A custom Ash resource `Media.Attachment` stores file metadata:
+  - `filename` (original name), `stored_filename` (server-generated unique name),
+    `content_type`, `path` (relative URL), `file_size` (bytes), `poi_id` (FK), `uploader_id` (FK).
 
-### Resources
-Three Ash resources handle the attachment model:
-
-1. **`Media.Blob`** — stores file metadata (filename, content type, size, service opts).
-   Extension: `AshStorage.BlobResource`.
-2. **`Media.Attachment`** — links a blob to a `Map.Poi`. Extension: `AshStorage.AttachmentResource`.
-3. **`Map.Poi`** — host resource. Declares:
-   ```elixir
-   storage do
-     service {AshStorage.Service.Disk, root: "priv/storage", base_url: "/storage"}
-     blob_resource Media.Blob
-     attachment_resource Media.Attachment
-     has_many_attached :photos
-   end
-   ```
-
-### Services by environment
-```elixir
-# config/dev.exs and config/test.exs
-config :platser, Map.Poi,
-  storage: [service: {AshStorage.Service.Disk, root: "priv/storage", base_url: "/storage"}]
-
-# config/test.exs
-config :platser, Map.Poi,
-  storage: [service: {AshStorage.Service.Test, []}]
-```
-
-### Migration path to S3
-Override the service in `config/prod.exs`:
-```elixir
-config :platser, Map.Poi,
-  storage: [service: {AshStorage.Service.S3, bucket: "platser-media"}]
-```
-No DB schema changes required. Requires `req_s3` as an additional dependency when using S3.
+### Upload flow
+1. LiveView declares `allow_upload(:photos, accept: ~w(.jpg .jpeg .png .webp), max_entries: 5,
+   max_file_size: 10_000_000)` in `mount/3`.
+2. On form submit, `consume_uploaded_entries/3` streams each file to disk.
+3. After the POI is created, one `Media.Attachment` record is inserted per uploaded file.
+4. If publishing, the publish action runs after attachments are persisted.
 
 ### File constraints
 - Maximum file size: 10 MB per image.
-- Accepted types: `image/jpeg`, `image/png`, `image/webp`.
-- Enforced in the attach action via Ash validations.
-
-## Consequences
-- **Positive:** Fully native to Ash — blob lifecycle (attach, detach, purge on POI destroy)
-  is managed via Ash actions and policies. `AshStorage.Service.Test` provides a clean
-  in-memory backend for tests with no disk I/O. Service backend is swappable per environment
-  via config with no code changes.
-- **Negative:** `ash_storage` is early (v0.1.x) — API may shift. Monitor the changelog.
-  Not yet on hex.pm as of the time of writing; install from GitHub if needed:
-  `{:ash_storage, github: "ash-project/ash_storage"}`.
-
-
-## Status
-Accepted
-
-## Context
-POIs support rich media: photos uploaded by event participants. We need a file storage
-strategy that works for local development and can migrate to cloud storage later.
-`ash_attachments` does not exist on hex.pm — `waffle` + `waffle_ecto` is the established
-Elixir file attachment solution.
-
-## Decision
-Use **local disk storage** for the MVP with **`waffle`** + **`waffle_ecto`** for file
-attachment handling.
-
-- `waffle` provides the upload pipeline (validation, transformation, storage).
-- `waffle_ecto` provides Ecto changeset integration for storing the file path.
-- Local storage path: `priv/static/uploads/` (served by Phoenix's static plug in dev).
-- Files are organised as: `uploads/{event_id}/{poi_id}/{filename}`.
-- Store the relative path in the DB (`path` string field on `Media.Attachment`).
-- Maximum file size: 10 MB per image. Accepted types: `image/jpeg`, `image/png`, `image/webp`.
-
-### Waffle integration with Ash
-Waffle/waffle_ecto works at the Ecto changeset level. Since Ash uses Ecto under the hood
-via `ash_postgres`, waffle_ecto can be wired into an Ash `change` module that wraps the
-waffle upload before the Ash action completes.
-
-### Required dependencies
-```elixir
-{:waffle, "~> 1.1"},
-{:waffle_ecto, "~> 0.0.12"}
-```
+- Accepted types: `.jpg`, `.jpeg`, `.png`, `.webp`.
+- Enforced by `allow_upload` (client-side validation with server-side enforcement).
 
 ### Migration path to S3
-Change the Waffle storage backend config from `Waffle.Storage.Local` to
-`Waffle.Storage.S3` (via `ex_aws_s3`) and set the relevant bucket/credential env vars.
-No DB schema changes required.
+Replace the `consume_uploaded_entries` body:
+```elixir
+# Replace File.cp with an ExAws.S3 put_object call
+ExAws.S3.put_object("my-bucket", stored_name, file_binary)
+|> ExAws.request!()
+```
+No DB schema changes required. Path stored in `Media.Attachment.path` becomes the S3 URL.
+
+### .gitignore
+`priv/static/uploads/` is added to `.gitignore` to avoid committing user-uploaded content.
 
 ## Consequences
-- **Positive:** Zero infrastructure for local dev. Easy to inspect uploaded files.
-  Waffle storage backend is swappable via config.
-- **Negative:** Files stored in `priv/static/uploads/` must be added to `.gitignore`.
-  In production, a volume mount or S3 is required — local disk is not suitable for
-  multi-node deployments.
+- **Positive:** Zero extra dependencies. Native LiveView upload progress tracking and
+  client-side validation work out of the box. Ash resource for metadata keeps attachment
+  lifecycle (cascade delete when POI is deleted) within the Ash authorization layer.
+- **Negative:** Files stored in `priv/static/uploads/` require a volume mount or object-store
+  bucket in production — local disk is unsuitable for multi-node deployments. No automatic
+  file purge if the LiveView crashes during upload (orphaned files possible; future cleanup job
+  needed).

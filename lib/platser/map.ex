@@ -5,6 +5,9 @@ defmodule Platser.Map do
   resources do
     resource Platser.Map.Poi do
       define :list_pois_for_event, action: :list_by_event, args: [:event_id]
+      define :create_poi, action: :create
+      define :get_poi, action: :read, get_by: [:id]
+      define :publish_poi, action: :publish
       define :delete_poi, action: :destroy
     end
 

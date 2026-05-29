@@ -92,6 +92,7 @@ export default {
 
     this.mapReady = false
     this.pendingCallbacks = []
+    this.pickMode = false
 
     this.map = new maplibregl.Map({
       container: this.el,
@@ -114,8 +115,23 @@ export default {
       this.pendingCallbacks = []
     })
 
+    this.map.on("click", e => {
+      if (!this.pickMode) return
+      const {lat, lng} = e.lngLat
+      this.pushEvent("poi_location_picked", {lat, lng})
+      this._disablePickMode()
+    })
+
     this.handleEvent("map_init", ({pois, geofences}) => {
       this.runWhenReady(() => this._initSources(pois, geofences))
+    })
+
+    this.handleEvent("enable_location_pick", () => {
+      this._enablePickMode()
+    })
+
+    this.handleEvent("disable_location_pick", () => {
+      this._disablePickMode()
     })
 
     this.handleEvent("poi_added", feature => {
@@ -149,6 +165,18 @@ export default {
     } else {
       this.pendingCallbacks.push(fn)
     }
+  },
+
+  _enablePickMode() {
+    this.pickMode = true
+    this.el.style.cursor = "crosshair"
+    if (this.map) this.map.getCanvas().style.cursor = "crosshair"
+  },
+
+  _disablePickMode() {
+    this.pickMode = false
+    this.el.style.cursor = ""
+    if (this.map) this.map.getCanvas().style.cursor = ""
   },
 
   _initSources(pois, geofences) {

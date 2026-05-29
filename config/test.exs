@@ -13,6 +13,7 @@ config :platser, Platser.Repo,
   password: "postgres",
   hostname: "localhost",
   database: "platser_test#{System.get_env("MIX_TEST_PARTITION")}",
+  types: Platser.PostgresTypes,
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: System.schedulers_online() * 2
 
