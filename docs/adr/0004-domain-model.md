@@ -119,6 +119,22 @@ Ash policies enforce:
 - Admins can delete any object in their event
 - Private objects are only visible to their creator (and event admin)
 
+#### `Accounts.User` read policy
+Any authenticated actor may read `Accounts.User` records
+(`authorize_if actor_present()`). This is required so that event members
+can see each other's `display_name` and initials in member lists and on the
+map. User records contain no sensitive data beyond `email` and `display_name`
+— the `hashed_password` field is marked `sensitive?: true` and is never
+returned by read actions.
+
+#### Member list visibility
+The `Membership.list_for_event` action is readable by **all event members**
+(not just admins). Any participant who is a member of an event may retrieve
+the full member list for that event. This is intentional: collaborative
+map events benefit from social awareness of who is present. Private
+events rely on social contract and join-code secrecy rather than hiding
+the participant list from members.
+
 ### Invariants
 - On `Event` creation, a `Membership` record with `role: :admin` is automatically created
   for the `creator_id`. The `creator_id` field and the `:admin` membership must always
