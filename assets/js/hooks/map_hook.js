@@ -152,6 +152,19 @@ export default {
 
     this.map.addControl(new maplibregl.NavigationControl(), "top-right")
 
+    this._onSetBoundsClick = e => {
+      if (e.target.closest("[data-set-map-area]") && this.map) {
+        const b = this.map.getBounds()
+        this.pushEvent("save_map_bounds", {
+          west: b.getWest(),
+          south: b.getSouth(),
+          east: b.getEast(),
+          north: b.getNorth(),
+        })
+      }
+    }
+    document.addEventListener("click", this._onSetBoundsClick)
+
     this.map.on("load", () => {
       this.mapReady = true
       this.pendingCallbacks.forEach(fn => fn())
@@ -183,8 +196,16 @@ export default {
       }
     })
 
-    this.handleEvent("map_init", ({pois, geofences}) => {
-      this.runWhenReady(() => this._initSources(pois, geofences))
+    this.handleEvent("map_init", ({pois, geofences, bounds}) => {
+      this.runWhenReady(() => {
+        this._initSources(pois, geofences)
+        if (bounds) {
+          this.map.fitBounds(
+            [[bounds.west, bounds.south], [bounds.east, bounds.north]],
+            {padding: 40, duration: 0}
+          )
+        }
+      })
     })
 
     this.handleEvent("enable_location_pick", () => {
@@ -205,6 +226,17 @@ export default {
 
     this.handleEvent("focus_map_object", payload => {
       this.runWhenReady(() => this._focusMapObject(payload))
+    })
+
+    this.handleEvent("fit_bounds", bounds => {
+      this.runWhenReady(() => {
+        if (bounds) {
+          this.map.fitBounds(
+            [[bounds.west, bounds.south], [bounds.east, bounds.north]],
+            {padding: 40, duration: 450}
+          )
+        }
+      })
     })
 
     this.handleEvent("undo_last_vertex", () => {
@@ -275,12 +307,6 @@ export default {
         heading: null,
       })
     }
-  },
-
-  destroyed() {
-    this._stopGeolocation()
-    this._clearAllMemberMarkers()
-    this.map?.remove()
   },
 
   runWhenReady(fn) {
@@ -571,6 +597,9 @@ export default {
   destroyed() {
     this._stopGeolocation()
     this._clearAllMemberMarkers()
+    if (this._onSetBoundsClick) {
+      document.removeEventListener("click", this._onSetBoundsClick)
+    }
     this.map?.remove()
   },
 }

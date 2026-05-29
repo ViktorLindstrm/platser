@@ -8,6 +8,7 @@ defmodule Platser.Events do
       define :list_events_for_user, action: :list_for_user
       define :get_event_by_join_code, action: :get_by_join_code, args: [:join_code]
       define :regenerate_event_join_code, action: :regenerate_join_code
+      define :set_event_bounds, action: :set_bounds, args: [:bounds]
     end
 
     resource Platser.Events.Membership do

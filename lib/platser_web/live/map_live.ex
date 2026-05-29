@@ -61,10 +61,12 @@ defmodule PlatserWeb.MapLive do
       case load_event(event_id, actor) do
         {:ok, event} ->
           {pois, geofences, entries} = load_map_data(event_id, actor)
+          is_admin = admin_member?(event_id, actor.id, actor)
 
           socket =
             socket
             |> assign(:event, event)
+            |> assign(:is_admin, is_admin)
             |> assign(:pois, pois)
             |> assign(:geofences, geofences)
             |> stream(:entries, entries)
@@ -126,7 +128,8 @@ defmodule PlatserWeb.MapLive do
 
     map_payload = %{
       pois: to_geojson_feature_collection(socket.assigns.pois, &poi_to_feature/1),
-      geofences: to_geojson_feature_collection(socket.assigns.geofences, &geofence_to_feature/1)
+      geofences: to_geojson_feature_collection(socket.assigns.geofences, &geofence_to_feature/1),
+      bounds: bounds_to_map(socket.assigns.event.bounds)
     }
 
     member_locations =
@@ -239,6 +242,31 @@ defmodule PlatserWeb.MapLive do
      socket
      |> assign(:drawer_open, drawer_open)
      |> assign(:unread_count, if(drawer_open, do: 0, else: socket.assigns.unread_count))}
+  end
+
+  def handle_event(
+        "save_map_bounds",
+        %{"west" => west, "south" => south, "east" => east, "north" => north},
+        socket
+      ) do
+    actor = socket.assigns.current_user
+
+    with :ok <- validate_bounds(west, south, east, north),
+         bounds_polygon = build_bounds_polygon(west, south, east, north),
+         {:ok, updated_event} <-
+           Platser.Events.set_event_bounds(socket.assigns.event, bounds_polygon, actor: actor) do
+      {:noreply,
+       socket
+       |> assign(:event, updated_event)
+       |> push_event("fit_bounds", bounds_to_map(updated_event.bounds))
+       |> put_flash(:info, "Map area saved.")}
+    else
+      {:error, :invalid_bounds} ->
+        {:noreply, put_flash(socket, :error, "Invalid bounds — could not save map area.")}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Could not save map area.")}
+    end
   end
 
   def handle_event("toggle_sharing", _params, socket) do
@@ -967,6 +995,17 @@ defmodule PlatserWeb.MapLive do
         (@poi_step != :idle or @geofence_step != :idle or @selected_map_object) &&
           "opacity-0 pointer-events-none"
       ]}>
+        <%!-- Set map area (admin only) --%>
+        <%= if @is_admin do %>
+          <button
+            id="set-map-area-btn"
+            data-set-map-area="true"
+            class="w-12 h-12 bg-white/90 backdrop-blur-sm rounded-full shadow-lg border border-gray-200 flex items-center justify-center hover:bg-amber-50 hover:border-amber-300 active:scale-95 transition-all"
+            title="Set map area to current viewport"
+          >
+            <.icon name="hero-viewfinder-circle" class="w-5 h-5 text-amber-600" />
+          </button>
+        <% end %>
         <%!-- Share location toggle --%>
         <button
           id="share-location-btn"
@@ -1747,4 +1786,45 @@ defmodule PlatserWeb.MapLive do
   @spec maybe_float(number() | nil) :: float() | nil
   defp maybe_float(nil), do: nil
   defp maybe_float(n), do: ensure_float(n)
+
+  @spec validate_bounds(term(), term(), term(), term()) :: :ok | {:error, :invalid_bounds}
+  defp validate_bounds(west, south, east, north) do
+    with true <- is_number(west) and is_number(south) and is_number(east) and is_number(north),
+         true <- Enum.all?([west, south, east, north], &(&1 != :nan and &1 != :infinity)),
+         true <- south < north,
+         true <- west >= -180 and west <= 180,
+         true <- east >= -180 and east <= 180,
+         true <- south >= -90 and south <= 90,
+         true <- north >= -90 and north <= 90 do
+      :ok
+    else
+      _ -> {:error, :invalid_bounds}
+    end
+  end
+
+  @spec build_bounds_polygon(number(), number(), number(), number()) :: Geo.Polygon.t()
+  defp build_bounds_polygon(west, south, east, north) do
+    w = ensure_float(west)
+    s = ensure_float(south)
+    e = ensure_float(east)
+    n = ensure_float(north)
+
+    ring = [{w, s}, {e, s}, {e, n}, {w, n}, {w, s}]
+    %Geo.Polygon{coordinates: [ring], srid: 4326}
+  end
+
+  @spec bounds_to_map(Geo.Polygon.t() | nil) :: map() | nil
+  defp bounds_to_map(nil), do: nil
+
+  defp bounds_to_map(%Geo.Polygon{coordinates: [ring | _]}) do
+    lngs = Enum.map(ring, &elem(&1, 0))
+    lats = Enum.map(ring, &elem(&1, 1))
+
+    %{
+      west: Enum.min(lngs),
+      south: Enum.min(lats),
+      east: Enum.max(lngs),
+      north: Enum.max(lats)
+    }
+  end
 end

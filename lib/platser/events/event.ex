@@ -39,6 +39,13 @@ defmodule Platser.Events.Event do
       require_atomic? false
       change Platser.Events.Changes.GenerateJoinCode
     end
+
+    update :set_bounds do
+      description "Sets or replaces the geographic bounds for the event map."
+      require_atomic? false
+      argument :bounds, Platser.Types.Geometry, allow_nil?: true
+      change set_attribute(:bounds, arg(:bounds))
+    end
   end
 
   policies do
@@ -59,6 +66,10 @@ defmodule Platser.Events.Event do
     end
 
     policy action(:regenerate_join_code) do
+      authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
+    end
+
+    policy action(:set_bounds) do
       authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
     end
   end
@@ -83,6 +94,8 @@ defmodule Platser.Events.Event do
     attribute :join_code, :string do
       allow_nil? false
     end
+
+    attribute :bounds, Platser.Types.Geometry
   end
 
   relationships do
