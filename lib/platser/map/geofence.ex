@@ -50,6 +50,19 @@ defmodule Platser.Map.Geofence do
       change Platser.Map.Changes.BroadcastGeofencePublish
     end
 
+    update :update do
+      accept [:name, :purpose, :color]
+      require_atomic? false
+
+      validate attribute_equals(:visibility, :private) do
+        message "can only edit draft geofences"
+      end
+
+      validate fn changeset, _ ->
+        validate_color(Ash.Changeset.get_attribute(changeset, :color))
+      end
+    end
+
     destroy :destroy do
       primary? true
     end
@@ -66,6 +79,11 @@ defmodule Platser.Map.Geofence do
 
     policy action_type(:create) do
       authorize_if expr(exists(event.memberships, user_id == ^actor(:id)))
+    end
+
+    policy action(:update) do
+      authorize_if expr(creator_id == ^actor(:id))
+      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
     end
 
     policy action(:publish) do

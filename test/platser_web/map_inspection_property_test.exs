@@ -54,7 +54,7 @@ defmodule PlatserWeb.MapInspectionPropertyTest do
 
         cond do
           can_manage? and visibility == :private ->
-            assert actions == [:focus, :publish, :delete]
+            assert actions == [:focus, :edit, :publish, :delete]
 
           can_manage? and visibility == :public ->
             assert actions == [:focus, :delete]

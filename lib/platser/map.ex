@@ -7,6 +7,7 @@ defmodule Platser.Map do
       define :list_pois_for_event, action: :list_by_event, args: [:event_id]
       define :create_poi, action: :create
       define :get_poi, action: :read, get_by: [:id]
+      define :update_poi, action: :update
       define :publish_poi, action: :publish
       define :delete_poi, action: :destroy
     end
@@ -15,6 +16,7 @@ defmodule Platser.Map do
       define :list_geofences_for_event, action: :list_by_event, args: [:event_id]
       define :create_geofence, action: :create
       define :get_geofence, action: :read, get_by: [:id]
+      define :update_geofence, action: :update
       define :publish_geofence, action: :publish
       define :delete_geofence, action: :destroy
     end

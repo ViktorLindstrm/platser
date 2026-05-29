@@ -44,6 +44,7 @@ defmodule PlatserWeb.MapLive do
   @type poi_step :: :idle | :picking | :editing
   @type geofence_step :: :idle | :drawing | :editing
   @type selected_map_object :: %{kind: MapInspection.kind(), item: Poi.t() | Geofence.t()}
+  @type editing_id :: Ecto.UUID.t() | nil
 
   @impl Phoenix.LiveView
   def mount(params, session, socket) do
@@ -91,6 +92,8 @@ defmodule PlatserWeb.MapLive do
             |> assign(:purpose_colors, @purpose_colors)
             |> assign(:selected_map_object, nil)
             |> assign(:selected_map_object_can_manage, false)
+            |> assign(:editing_poi_id, nil)
+            |> assign(:editing_geofence_id, nil)
             |> allow_upload(:photos,
               accept: ~w(.jpg .jpeg .png .webp),
               max_entries: 5,
@@ -381,6 +384,44 @@ defmodule PlatserWeb.MapLive do
     {:noreply, cancel_upload(socket, :photos, ref)}
   end
 
+  def handle_event("edit_selected_map_object", _params, socket) do
+    case socket.assigns.selected_map_object do
+      %{kind: :poi, item: %Poi{} = poi} ->
+        {:noreply,
+         socket
+         |> assign(:selected_map_object, nil)
+         |> assign(:selected_map_object_can_manage, false)
+         |> assign(:editing_poi_id, poi.id)
+         |> assign(:editing_geofence_id, nil)
+         |> assign(:geofence_step, :idle)
+         |> assign(:poi_step, :editing)
+         |> assign(:poi_location, poi.location)
+         |> assign(:poi_name, poi.name)
+         |> assign(:poi_description, poi.description || "")
+         |> assign(:poi_category, to_string(poi.category))
+         |> assign(:poi_errors, [])}
+
+      %{kind: :geofence, item: %Geofence{} = geofence} ->
+        {:noreply,
+         socket
+         |> assign(:selected_map_object, nil)
+         |> assign(:selected_map_object_can_manage, false)
+         |> assign(:editing_geofence_id, geofence.id)
+         |> assign(:editing_poi_id, nil)
+         |> assign(:poi_step, :idle)
+         |> assign(:geofence_step, :editing)
+         |> assign(:geofence_vertices, [])
+         |> assign(:geofence_geometry, geofence.geometry)
+         |> assign(:geofence_name, geofence.name)
+         |> assign(:geofence_purpose, to_string(geofence.purpose))
+         |> assign(:geofence_color, geofence.color)
+         |> assign(:geofence_errors, [])}
+
+      nil ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("poi_location_picked", %{"lat" => lat, "lng" => lng}, socket) do
     location = %Geo.Point{coordinates: {lng, lat}, srid: 4326}
 
@@ -597,50 +638,110 @@ defmodule PlatserWeb.MapLive do
     if errors != [] do
       {:noreply, assign(socket, :poi_errors, errors)}
     else
-      poi_params = %{
+      poi_attrs = %{
         name: String.trim(params["name"]),
         description: params["description"],
         category: String.to_existing_atom(params["category"]),
-        location: location,
-        event_id: event.id
+        location: location
       }
 
-      case PlatserMap.create_poi(poi_params, actor: actor) do
-        {:ok, poi} ->
-          _uploaded_paths = handle_photo_uploads(socket, poi, actor)
+      case socket.assigns.editing_poi_id do
+        nil ->
+          do_create_poi(Map.put(poi_attrs, :event_id, event.id), publish?, socket, actor)
 
-          socket =
-            if publish? do
-              case PlatserMap.publish_poi(poi, actor: actor) do
-                {:ok, _published} ->
-                  socket
-                  |> reset_poi_form()
-                  |> push_event("poi_added", poi_to_feature(poi))
-                  |> put_flash(:info, "POI published! Everyone can see it.")
-
-                {:error, %Ash.Error.Invalid{} = err} ->
-                  msg = Ash.Error.to_error_class(err).message || "Could not publish POI"
-                  socket |> reset_poi_form() |> put_flash(:error, msg)
-
-                {:error, _} ->
-                  socket |> reset_poi_form() |> put_flash(:error, "Could not publish POI")
-              end
-            else
-              socket
-              |> reset_poi_form()
-              |> push_event("poi_added", poi_to_feature(poi))
-              |> put_flash(:info, "POI saved as draft. Only you can see it.")
-            end
-
-          {:noreply, socket}
-
-        {:error, %Ash.Error.Invalid{} = err} ->
-          errors = format_ash_errors(err)
-          {:noreply, assign(socket, :poi_errors, errors)}
-
-        {:error, _} ->
-          {:noreply, assign(socket, :poi_errors, [{"base", "Could not save POI"}])}
+        poi_id ->
+          do_update_poi(poi_id, poi_attrs, publish?, socket, actor)
       end
+    end
+  end
+
+  @spec do_create_poi(map(), boolean(), Phoenix.LiveView.Socket.t(), Platser.Accounts.User.t()) ::
+          {:noreply, Phoenix.LiveView.Socket.t()}
+  defp do_create_poi(params, publish?, socket, actor) do
+    case PlatserMap.create_poi(params, actor: actor) do
+      {:ok, poi} ->
+        _uploaded_paths = handle_photo_uploads(socket, poi, actor)
+
+        socket =
+          if publish? do
+            case PlatserMap.publish_poi(poi, actor: actor) do
+              {:ok, _published} ->
+                socket
+                |> reset_poi_form()
+                |> push_event("poi_added", poi_to_feature(poi))
+                |> put_flash(:info, "POI published! Everyone can see it.")
+
+              {:error, %Ash.Error.Invalid{} = err} ->
+                msg = Ash.Error.to_error_class(err).message || "Could not publish POI"
+                socket |> reset_poi_form() |> put_flash(:error, msg)
+
+              {:error, _} ->
+                socket |> reset_poi_form() |> put_flash(:error, "Could not publish POI")
+            end
+          else
+            socket
+            |> reset_poi_form()
+            |> push_event("poi_added", poi_to_feature(poi))
+            |> put_flash(:info, "POI saved as draft. Only you can see it.")
+          end
+
+        {:noreply, socket}
+
+      {:error, %Ash.Error.Invalid{} = err} ->
+        errors = format_ash_errors(err)
+        {:noreply, assign(socket, :poi_errors, errors)}
+
+      {:error, _} ->
+        {:noreply, assign(socket, :poi_errors, [{"base", "Could not save POI"}])}
+    end
+  end
+
+  @spec do_update_poi(
+          Ecto.UUID.t(),
+          map(),
+          boolean(),
+          Phoenix.LiveView.Socket.t(),
+          Platser.Accounts.User.t()
+        ) :: {:noreply, Phoenix.LiveView.Socket.t()}
+  defp do_update_poi(poi_id, attrs, publish?, socket, actor) do
+    case PlatserMap.get_poi(poi_id, actor: actor) do
+      {:ok, poi} ->
+        case PlatserMap.update_poi(poi, attrs, actor: actor) do
+          {:ok, updated} ->
+            socket =
+              if publish? do
+                case PlatserMap.publish_poi(updated, actor: actor) do
+                  {:ok, published} ->
+                    socket
+                    |> reset_poi_form()
+                    |> push_event("poi_updated", poi_to_feature(published))
+                    |> put_flash(:info, "POI updated and published!")
+
+                  {:error, _} ->
+                    socket
+                    |> reset_poi_form()
+                    |> push_event("poi_updated", poi_to_feature(updated))
+                    |> put_flash(:info, "POI saved.")
+                end
+              else
+                socket
+                |> reset_poi_form()
+                |> push_event("poi_updated", poi_to_feature(updated))
+                |> put_flash(:info, "POI saved.")
+              end
+
+            {:noreply, socket}
+
+          {:error, %Ash.Error.Invalid{} = err} ->
+            errors = format_ash_errors(err)
+            {:noreply, assign(socket, :poi_errors, errors)}
+
+          {:error, _} ->
+            {:noreply, assign(socket, :poi_errors, [{"base", "Could not update POI"}])}
+        end
+
+      {:error, _} ->
+        {:noreply, assign(socket, :poi_errors, [{"base", "POI not found or was deleted"}])}
     end
   end
 
@@ -724,6 +825,7 @@ defmodule PlatserWeb.MapLive do
     |> assign(:poi_description, "")
     |> assign(:poi_category, "viewpoint")
     |> assign(:poi_errors, [])
+    |> assign(:editing_poi_id, nil)
     |> push_event("disable_location_pick", %{})
   end
 
@@ -737,6 +839,7 @@ defmodule PlatserWeb.MapLive do
     |> assign(:geofence_purpose, "boundary")
     |> assign(:geofence_color, Map.fetch!(@purpose_colors, "boundary"))
     |> assign(:geofence_errors, [])
+    |> assign(:editing_geofence_id, nil)
     |> push_event("disable_draw_mode", %{})
   end
 
@@ -817,50 +920,122 @@ defmodule PlatserWeb.MapLive do
     if errors != [] do
       {:noreply, assign(socket, :geofence_errors, errors)}
     else
-      geofence_params = %{
-        name: String.trim(params["name"]),
-        purpose: String.to_existing_atom(params["purpose"]),
-        color: params["color"],
-        geometry: geometry,
-        event_id: event.id
-      }
+      case socket.assigns.editing_geofence_id do
+        nil ->
+          geofence_params = %{
+            name: String.trim(params["name"]),
+            purpose: String.to_existing_atom(params["purpose"]),
+            color: params["color"],
+            geometry: geometry,
+            event_id: event.id
+          }
 
-      case PlatserMap.create_geofence(geofence_params, actor: actor) do
-        {:ok, geofence} ->
-          socket =
-            if publish? do
-              case PlatserMap.publish_geofence(geofence, actor: actor) do
-                {:ok, _published} ->
-                  socket
-                  |> reset_geofence_form()
-                  |> push_event("geofence_added", geofence_to_feature(geofence))
-                  |> put_flash(:info, "Geofence published! Everyone can see it.")
+          do_create_geofence(geofence_params, publish?, socket, actor)
 
-                {:error, %Ash.Error.Invalid{} = err} ->
-                  msg = Ash.Error.to_error_class(err).message || "Could not publish geofence"
-                  socket |> reset_geofence_form() |> put_flash(:error, msg)
+        geofence_id ->
+          geofence_attrs = %{
+            name: String.trim(params["name"]),
+            purpose: String.to_existing_atom(params["purpose"]),
+            color: params["color"]
+          }
 
-                {:error, _} ->
-                  socket
-                  |> reset_geofence_form()
-                  |> put_flash(:error, "Could not publish geofence")
-              end
-            else
-              socket
-              |> reset_geofence_form()
-              |> push_event("geofence_added", geofence_to_feature(geofence))
-              |> put_flash(:info, "Geofence saved as draft. Only you can see it.")
-            end
-
-          {:noreply, socket}
-
-        {:error, %Ash.Error.Invalid{} = err} ->
-          errors = format_ash_errors(err)
-          {:noreply, assign(socket, :geofence_errors, errors)}
-
-        {:error, _} ->
-          {:noreply, assign(socket, :geofence_errors, [{"base", "Could not save geofence"}])}
+          do_update_geofence(geofence_id, geofence_attrs, publish?, socket, actor)
       end
+    end
+  end
+
+  @spec do_create_geofence(
+          map(),
+          boolean(),
+          Phoenix.LiveView.Socket.t(),
+          Platser.Accounts.User.t()
+        ) :: {:noreply, Phoenix.LiveView.Socket.t()}
+  defp do_create_geofence(params, publish?, socket, actor) do
+    case PlatserMap.create_geofence(params, actor: actor) do
+      {:ok, geofence} ->
+        socket =
+          if publish? do
+            case PlatserMap.publish_geofence(geofence, actor: actor) do
+              {:ok, _published} ->
+                socket
+                |> reset_geofence_form()
+                |> push_event("geofence_added", geofence_to_feature(geofence))
+                |> put_flash(:info, "Geofence published! Everyone can see it.")
+
+              {:error, %Ash.Error.Invalid{} = err} ->
+                msg = Ash.Error.to_error_class(err).message || "Could not publish geofence"
+                socket |> reset_geofence_form() |> put_flash(:error, msg)
+
+              {:error, _} ->
+                socket
+                |> reset_geofence_form()
+                |> put_flash(:error, "Could not publish geofence")
+            end
+          else
+            socket
+            |> reset_geofence_form()
+            |> push_event("geofence_added", geofence_to_feature(geofence))
+            |> put_flash(:info, "Geofence saved as draft. Only you can see it.")
+          end
+
+        {:noreply, socket}
+
+      {:error, %Ash.Error.Invalid{} = err} ->
+        errors = format_ash_errors(err)
+        {:noreply, assign(socket, :geofence_errors, errors)}
+
+      {:error, _} ->
+        {:noreply, assign(socket, :geofence_errors, [{"base", "Could not save geofence"}])}
+    end
+  end
+
+  @spec do_update_geofence(
+          Ecto.UUID.t(),
+          map(),
+          boolean(),
+          Phoenix.LiveView.Socket.t(),
+          Platser.Accounts.User.t()
+        ) :: {:noreply, Phoenix.LiveView.Socket.t()}
+  defp do_update_geofence(geofence_id, attrs, publish?, socket, actor) do
+    case PlatserMap.get_geofence(geofence_id, actor: actor) do
+      {:ok, geofence} ->
+        case PlatserMap.update_geofence(geofence, attrs, actor: actor) do
+          {:ok, updated} ->
+            socket =
+              if publish? do
+                case PlatserMap.publish_geofence(updated, actor: actor) do
+                  {:ok, published} ->
+                    socket
+                    |> reset_geofence_form()
+                    |> push_event("geofence_updated", geofence_to_feature(published))
+                    |> put_flash(:info, "Geofence updated and published!")
+
+                  {:error, _} ->
+                    socket
+                    |> reset_geofence_form()
+                    |> push_event("geofence_updated", geofence_to_feature(updated))
+                    |> put_flash(:info, "Geofence saved.")
+                end
+              else
+                socket
+                |> reset_geofence_form()
+                |> push_event("geofence_updated", geofence_to_feature(updated))
+                |> put_flash(:info, "Geofence saved.")
+              end
+
+            {:noreply, socket}
+
+          {:error, %Ash.Error.Invalid{} = err} ->
+            errors = format_ash_errors(err)
+            {:noreply, assign(socket, :geofence_errors, errors)}
+
+          {:error, _} ->
+            {:noreply, assign(socket, :geofence_errors, [{"base", "Could not update geofence"}])}
+        end
+
+      {:error, _} ->
+        {:noreply,
+         assign(socket, :geofence_errors, [{"base", "Geofence not found or was deleted"}])}
     end
   end
 
@@ -1056,7 +1231,9 @@ defmodule PlatserWeb.MapLive do
           <%!-- Sheet header --%>
           <div class="flex items-center justify-between px-5 pt-4 pb-3 border-b border-gray-100">
             <div class="w-10 h-1 bg-gray-200 rounded-full absolute top-2 left-1/2 -translate-x-1/2" />
-            <h2 class="text-base font-semibold text-gray-900">New Point of Interest</h2>
+            <h2 class="text-base font-semibold text-gray-900">
+              {if @editing_poi_id, do: "Edit Point of Interest", else: "New Point of Interest"}
+            </h2>
             <button
               phx-click="cancel_poi_form"
               class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
@@ -1182,52 +1359,54 @@ defmodule PlatserWeb.MapLive do
                 </div>
               </div>
 
-              <%!-- Photos --%>
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">
-                  Photos <span class="text-gray-400 font-normal">(optional, up to 5)</span>
-                </label>
-                <div class="flex items-center gap-2">
-                  <label
-                    for={@uploads.photos.ref}
-                    class="flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-gray-300 bg-gray-50 text-sm text-gray-600 hover:bg-gray-100 cursor-pointer transition-colors"
-                  >
-                    <.icon name="hero-camera" class="w-4 h-4" /> Add photos
-                    <.live_file_input upload={@uploads.photos} class="sr-only" />
+              <%!-- Photos (new POI only) --%>
+              <%= if is_nil(@editing_poi_id) do %>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">
+                    Photos <span class="text-gray-400 font-normal">(optional, up to 5)</span>
                   </label>
-                  <%= if length(@uploads.photos.entries) > 0 do %>
-                    <span class="text-xs text-gray-500">
-                      {length(@uploads.photos.entries)} selected
-                    </span>
-                  <% end %>
-                </div>
-                <%!-- Upload previews --%>
-                <%= if length(@uploads.photos.entries) > 0 do %>
-                  <div class="mt-2 flex gap-2 flex-wrap">
-                    <%= for entry <- @uploads.photos.entries do %>
-                      <div class="relative">
-                        <.live_img_preview entry={entry} class="w-16 h-16 object-cover rounded-lg" />
-                        <button
-                          type="button"
-                          phx-click="cancel_upload"
-                          phx-value-ref={entry.ref}
-                          class="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center"
-                        >
-                          <.icon name="hero-x-mark" class="w-3 h-3 text-white" />
-                        </button>
-                        <%= if entry.progress > 0 and entry.progress < 100 do %>
-                          <div class="absolute inset-0 bg-black/40 rounded-lg flex items-center justify-center">
-                            <span class="text-white text-xs font-bold">{entry.progress}%</span>
-                          </div>
-                        <% end %>
-                        <%= for err <- upload_errors(@uploads.photos, entry) do %>
-                          <p class="text-xs text-red-600 mt-1">{upload_error_to_string(err)}</p>
-                        <% end %>
-                      </div>
+                  <div class="flex items-center gap-2">
+                    <label
+                      for={@uploads.photos.ref}
+                      class="flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-gray-300 bg-gray-50 text-sm text-gray-600 hover:bg-gray-100 cursor-pointer transition-colors"
+                    >
+                      <.icon name="hero-camera" class="w-4 h-4" /> Add photos
+                      <.live_file_input upload={@uploads.photos} class="sr-only" />
+                    </label>
+                    <%= if length(@uploads.photos.entries) > 0 do %>
+                      <span class="text-xs text-gray-500">
+                        {length(@uploads.photos.entries)} selected
+                      </span>
                     <% end %>
                   </div>
-                <% end %>
-              </div>
+                  <%!-- Upload previews --%>
+                  <%= if length(@uploads.photos.entries) > 0 do %>
+                    <div class="mt-2 flex gap-2 flex-wrap">
+                      <%= for entry <- @uploads.photos.entries do %>
+                        <div class="relative">
+                          <.live_img_preview entry={entry} class="w-16 h-16 object-cover rounded-lg" />
+                          <button
+                            type="button"
+                            phx-click="cancel_upload"
+                            phx-value-ref={entry.ref}
+                            class="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center"
+                          >
+                            <.icon name="hero-x-mark" class="w-3 h-3 text-white" />
+                          </button>
+                          <%= if entry.progress > 0 and entry.progress < 100 do %>
+                            <div class="absolute inset-0 bg-black/40 rounded-lg flex items-center justify-center">
+                              <span class="text-white text-xs font-bold">{entry.progress}%</span>
+                            </div>
+                          <% end %>
+                          <%= for err <- upload_errors(@uploads.photos, entry) do %>
+                            <p class="text-xs text-red-600 mt-1">{upload_error_to_string(err)}</p>
+                          <% end %>
+                        </div>
+                      <% end %>
+                    </div>
+                  <% end %>
+                </div>
+              <% end %>
 
               <%!-- Actions --%>
               <div class="flex gap-2 pt-1 pb-2">
@@ -1237,7 +1416,7 @@ defmodule PlatserWeb.MapLive do
                   value="false"
                   class="flex-1 py-2.5 rounded-xl border border-gray-300 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 active:scale-95 transition-all"
                 >
-                  Save draft
+                  {if @editing_poi_id, do: "Save", else: "Save draft"}
                 </button>
                 <button
                   type="submit"
@@ -1245,7 +1424,7 @@ defmodule PlatserWeb.MapLive do
                   value="true"
                   class="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 active:scale-95 transition-all"
                 >
-                  Publish
+                  {if @editing_poi_id, do: "Save & Publish", else: "Publish"}
                 </button>
               </div>
             </.form>
@@ -1265,7 +1444,9 @@ defmodule PlatserWeb.MapLive do
           <%!-- Sheet header --%>
           <div class="flex items-center justify-between px-5 pt-4 pb-3 border-b border-gray-100">
             <div class="w-10 h-1 bg-gray-200 rounded-full absolute top-2 left-1/2 -translate-x-1/2" />
-            <h2 class="text-base font-semibold text-gray-900">New Geofence</h2>
+            <h2 class="text-base font-semibold text-gray-900">
+              {if @editing_geofence_id, do: "Edit Geofence", else: "New Geofence"}
+            </h2>
             <button
               phx-click="cancel_geofence_form"
               class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
@@ -1284,19 +1465,28 @@ defmodule PlatserWeb.MapLive do
               class="px-5 py-4 space-y-4"
             >
               <%!-- Polygon indicator --%>
-              <div class="flex items-center gap-2 px-3 py-2 rounded-xl border border-indigo-300 bg-indigo-50 text-sm text-indigo-700">
-                <.icon name="hero-check-circle" class="w-4 h-4 shrink-0" />
-                <span>
-                  Polygon drawn — {length(@geofence_vertices)} vertices
-                </span>
-                <button
-                  type="button"
-                  phx-click="cancel_geofence_form"
-                  class="ml-auto px-2 py-0.5 rounded-lg border border-indigo-200 text-xs text-indigo-600 hover:bg-indigo-100 transition-colors"
-                >
-                  Redraw
-                </button>
-              </div>
+              <%= if @editing_geofence_id do %>
+                <div class="flex items-center gap-2 px-3 py-2 rounded-xl border border-indigo-300 bg-indigo-50 text-sm text-indigo-700">
+                  <.icon name="hero-check-circle" class="w-4 h-4 shrink-0" />
+                  <span>
+                    Existing polygon — {geofence_vertex_count(@geofence_geometry)} vertices
+                  </span>
+                </div>
+              <% else %>
+                <div class="flex items-center gap-2 px-3 py-2 rounded-xl border border-indigo-300 bg-indigo-50 text-sm text-indigo-700">
+                  <.icon name="hero-check-circle" class="w-4 h-4 shrink-0" />
+                  <span>
+                    Polygon drawn — {length(@geofence_vertices)} vertices
+                  </span>
+                  <button
+                    type="button"
+                    phx-click="cancel_geofence_form"
+                    class="ml-auto px-2 py-0.5 rounded-lg border border-indigo-200 text-xs text-indigo-600 hover:bg-indigo-100 transition-colors"
+                  >
+                    Redraw
+                  </button>
+                </div>
+              <% end %>
 
               <%!-- Form errors --%>
               <%= if @geofence_errors != [] do %>
@@ -1416,7 +1606,7 @@ defmodule PlatserWeb.MapLive do
                   value="false"
                   class="flex-1 py-2.5 rounded-xl border border-gray-300 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 active:scale-95 transition-all"
                 >
-                  Save draft
+                  {if @editing_geofence_id, do: "Save", else: "Save draft"}
                 </button>
                 <button
                   type="submit"
@@ -1424,7 +1614,7 @@ defmodule PlatserWeb.MapLive do
                   value="true"
                   class="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 active:scale-95 transition-all"
                 >
-                  Publish
+                  {if @editing_geofence_id, do: "Save & Publish", else: "Publish"}
                 </button>
               </div>
             </.form>
@@ -1563,6 +1753,13 @@ defmodule PlatserWeb.MapLive do
 
                 <%= if @selected_map_object_can_manage do %>
                   <%= if MapInspection.resource_status(item) == :draft do %>
+                    <button
+                      id="map-item-edit-btn"
+                      phx-click="edit_selected_map_object"
+                      class="flex-1 py-2.5 rounded-xl border border-gray-300 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 active:scale-95 transition-all"
+                    >
+                      Edit
+                    </button>
                     <button
                       id="map-item-publish-btn"
                       phx-click="publish_selected_map_object"

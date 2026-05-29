@@ -7,7 +7,7 @@ defmodule PlatserWeb.MapInspection do
   @type kind :: :poi | :geofence
   @type visibility :: :private | :public
   @type status :: :draft | :published
-  @type action :: :focus | :publish | :delete
+  @type action :: :focus | :edit | :publish | :delete
 
   @spec kind_label(kind()) :: String.t()
   def kind_label(:poi), do: "Point of interest"
@@ -41,6 +41,6 @@ defmodule PlatserWeb.MapInspection do
   def resource_status(%{visibility: visibility}), do: status(visibility)
 
   @spec manage_actions(visibility()) :: [action()]
-  defp manage_actions(:private), do: [:publish, :delete]
+  defp manage_actions(:private), do: [:edit, :publish, :delete]
   defp manage_actions(:public), do: [:delete]
 end

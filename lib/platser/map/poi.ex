@@ -42,6 +42,15 @@ defmodule Platser.Map.Poi do
       change Platser.Map.Changes.BroadcastPublish
     end
 
+    update :update do
+      accept [:name, :description, :category, :location]
+      require_atomic? false
+
+      validate attribute_equals(:visibility, :private) do
+        message "can only edit draft POIs"
+      end
+    end
+
     destroy :destroy do
       primary? true
     end
@@ -58,6 +67,11 @@ defmodule Platser.Map.Poi do
 
     policy action_type(:create) do
       authorize_if expr(exists(event.memberships, user_id == ^actor(:id)))
+    end
+
+    policy action(:update) do
+      authorize_if expr(creator_id == ^actor(:id))
+      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
     end
 
     policy action(:publish) do
