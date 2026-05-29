@@ -46,6 +46,12 @@ defmodule Platser.Accounts.User do
       change AshAuthentication.Strategy.Password.HashPasswordChange
     end
 
+    create :create_simulated do
+      description "Creates a dev-only simulated user (is_simulated: true, no password required)."
+      accept [:email, :display_name]
+      change set_attribute(:is_simulated, true)
+    end
+
     read :get_by_subject do
       description "Get a user by the subject claim in a JWT"
       argument :subject, :string, allow_nil?: false
@@ -60,6 +66,10 @@ defmodule Platser.Accounts.User do
     end
 
     policy action_type(:read) do
+      authorize_if actor_present()
+    end
+
+    policy action(:create_simulated) do
       authorize_if actor_present()
     end
   end

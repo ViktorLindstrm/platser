@@ -80,6 +80,9 @@ config :platser, PlatserWeb.Endpoint,
 # Enable dev routes for dashboard and mailbox
 config :platser, dev_routes: true, token_signing_secret: "dWl+pCLneJ/+Yu5BWWiSBHtMPLaC0j/C"
 
+# Start the GPS simulator in dev
+config :platser, start_gps_simulator: true
+
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
 

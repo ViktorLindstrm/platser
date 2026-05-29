@@ -13,7 +13,8 @@ defmodule Platser.EventPresence do
       heading: float() | nil,
       timestamp: integer(),         # Unix ms
       geofence_ids: [String.t()],   # IDs of public geofences currently containing this user
-      display_name: String.t()
+      display_name: String.t(),
+      is_simulated: boolean()
     }
   """
 
@@ -28,7 +29,8 @@ defmodule Platser.EventPresence do
           heading: float() | nil,
           timestamp: integer(),
           geofence_ids: [String.t()],
-          display_name: String.t()
+          display_name: String.t(),
+          is_simulated: boolean()
         }
 
   @doc "Returns the topic string for a given event ID."

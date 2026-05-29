@@ -99,6 +99,18 @@ function parseZoom(value) {
   return Number.isNaN(zoom) ? 2 : zoom
 }
 
+function extendBounds(bounds, coordinates) {
+  if (!Array.isArray(coordinates)) return bounds
+
+  if (coordinates.length === 2 && coordinates.every(value => typeof value === "number")) {
+    bounds.extend(coordinates)
+    return bounds
+  }
+
+  coordinates.forEach(child => extendBounds(bounds, child))
+  return bounds
+}
+
 export default {
   mounted() {
     const pmtilesUrl = this.el.dataset.pmtilesUrl
@@ -156,6 +168,18 @@ export default {
         this.drawVertices.push([lng, lat])
         this._updateDrawPreview()
         this.pushEvent("vertex_added", {vertices: this.drawVertices})
+      } else {
+        const features = this.map.queryRenderedFeatures(e.point, {
+          layers: ["poi-circles", "geofence-fills", "geofence-lines"],
+        })
+
+        const feature = features[0]
+        if (feature?.id) {
+          this.pushEvent("inspect_map_object", {
+            kind: feature.layer?.id === "poi-circles" ? "poi" : "geofence",
+            id: feature.id,
+          })
+        }
       }
     })
 
@@ -177,6 +201,10 @@ export default {
 
     this.handleEvent("disable_draw_mode", () => {
       this.runWhenReady(() => this._disableDrawMode())
+    })
+
+    this.handleEvent("focus_map_object", payload => {
+      this.runWhenReady(() => this._focusMapObject(payload))
     })
 
     this.handleEvent("undo_last_vertex", () => {
@@ -224,12 +252,12 @@ export default {
 
     this.handleEvent("member_locations_init", ({locations}) => {
       this.runWhenReady(() => {
-        locations.forEach(loc => this._upsertMemberMarker(loc.user_id, loc.lat, loc.lng, loc.display_name))
+        locations.forEach(loc => this._upsertMemberMarker(loc.user_id, loc.lat, loc.lng, loc.display_name, loc.is_simulated))
       })
     })
 
-    this.handleEvent("member_location_updated", ({user_id, lat, lng, display_name}) => {
-      this.runWhenReady(() => this._upsertMemberMarker(user_id, lat, lng, display_name))
+    this.handleEvent("member_location_updated", ({user_id, lat, lng, display_name, is_simulated}) => {
+      this.runWhenReady(() => this._upsertMemberMarker(user_id, lat, lng, display_name, is_simulated))
     })
 
     this.handleEvent("member_location_removed", ({user_id}) => {
@@ -289,6 +317,23 @@ export default {
     this.el.style.cursor = ""
     this.map.getCanvas().style.cursor = ""
     this._clearDrawPreview()
+  },
+
+  _focusMapObject(payload) {
+    const geometry = payload?.geometry
+    if (!geometry || !this.map) return
+
+    if (geometry.type === "Point") {
+      const [lng, lat] = geometry.coordinates
+      this.map.flyTo({center: [lng, lat], zoom: Math.max(this.map.getZoom(), 15), duration: 450})
+      return
+    }
+
+    if (geometry.type === "Polygon") {
+      const bounds = new maplibregl.LngLatBounds()
+      extendBounds(bounds, geometry.coordinates)
+      this.map.fitBounds(bounds, {padding: 64, maxZoom: 16, duration: 450})
+    }
   },
 
   _setupDrawPreviewLayers() {
@@ -421,6 +466,7 @@ export default {
         },
       })
     }
+
   },
 
   _upsertFeature(sourceId, feature) {
@@ -474,7 +520,7 @@ export default {
     }
   },
 
-  _upsertMemberMarker(userId, lat, lng, displayName) {
+  _upsertMemberMarker(userId, lat, lng, displayName, isSimulated = false) {
     if (this.memberMarkers[userId]) {
       this.memberMarkers[userId].setLngLat([lng, lat])
     } else {
@@ -485,7 +531,7 @@ export default {
         "height:36px",
         "border-radius:50%",
         "background:" + memberColor(userId),
-        "border:3px solid white",
+        isSimulated ? "border:3px dashed rgba(255,255,255,0.95)" : "border:3px solid white",
         "box-shadow:0 2px 8px rgba(0,0,0,0.3)",
         "display:flex",
         "align-items:center",
@@ -498,7 +544,7 @@ export default {
       ].join(";")
 
       el.textContent = (displayName || "?").charAt(0).toUpperCase()
-      el.title = displayName || userId
+      el.title = `${displayName || userId}${isSimulated ? " (simulated)" : ""}`
 
       const marker = new maplibregl.Marker({element: el})
         .setLngLat([lng, lat])

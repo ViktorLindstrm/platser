@@ -77,7 +77,8 @@ defmodule Platser.Location do
         heading: heading,
         timestamp: System.system_time(:millisecond),
         geofence_ids: new_geofence_ids,
-        display_name: user.display_name
+        display_name: user.display_name,
+        is_simulated: Map.get(user, :is_simulated, false)
       }
 
       if already_tracked? do
@@ -103,12 +104,21 @@ defmodule Platser.Location do
         where:
           fragment(
             "ST_Within(ST_SetSRID(ST_MakePoint(?, ?), 4326), ?)",
-            ^lng,
-            ^lat,
+            type(^lng, :float),
+            type(^lat, :float),
             g.geometry
           ),
         select: type(g.id, :binary_id)
     )
+  rescue
+    error in [Postgrex.Error] ->
+      require Logger
+
+      Logger.warning(
+        "Geofence lookup skipped because PostGIS is unavailable: #{Exception.message(error)}"
+      )
+
+      []
   end
 
   # ---------------------------------------------------------------------------

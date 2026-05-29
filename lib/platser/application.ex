@@ -5,6 +5,8 @@ defmodule Platser.Application do
 
   use Application
 
+  @start_gps_simulator Application.compile_env(:platser, :start_gps_simulator, false)
+
   @impl true
   def start(_type, _args) do
     children = [
@@ -22,6 +24,13 @@ defmodule Platser.Application do
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
+    children =
+      if @start_gps_simulator do
+        children ++ [{Platser.Dev.GpsSimulator, []}]
+      else
+        children
+      end
+
     opts = [strategy: :one_for_one, name: Platser.Supervisor]
     Supervisor.start_link(children, opts)
   end

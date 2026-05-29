@@ -65,6 +65,7 @@ defmodule PlatserWeb.Router do
       pipe_through :browser
 
       live_dashboard "/dashboard", metrics: PlatserWeb.Telemetry
+      live "/simulator", PlatserWeb.Dev.SimulatorLive
       forward "/mailbox", Plug.Swoosh.MailboxPreview
     end
   end

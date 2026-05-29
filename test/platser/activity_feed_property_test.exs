@@ -92,7 +92,7 @@ defmodule Platser.ActivityFeedPropertyTest do
   describe "ordering invariant" do
     property "inserting N entries always returns exactly N entries newest-first" do
       check all(
-              n <- StreamData.positive_integer() |> StreamData.filter(&(&1 <= 20)),
+              n <- StreamData.integer(1..20),
               max_runs: 20
             ) do
         {user, event} = create_event_with_member()
@@ -119,7 +119,7 @@ defmodule Platser.ActivityFeedPropertyTest do
     property "count_unread_since equals entries inserted after last_read_at boundary" do
       check all(
               before_count <- StreamData.integer(0..10),
-              after_count <- StreamData.positive_integer() |> StreamData.filter(&(&1 <= 10)),
+              after_count <- StreamData.integer(1..10),
               base_offset <- StreamData.integer(0..100_000),
               max_runs: 100
             ) do

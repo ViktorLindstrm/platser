@@ -9,6 +9,7 @@ defmodule PlatserWeb.MapLive do
   alias Platser.Map, as: PlatserMap
   alias Platser.Map.Geofence
   alias Platser.Map.Poi
+  alias PlatserWeb.MapInspection
 
   @pmtiles_url Application.compile_env(
                  :platser,
@@ -42,67 +43,80 @@ defmodule PlatserWeb.MapLive do
 
   @type poi_step :: :idle | :picking | :editing
   @type geofence_step :: :idle | :drawing | :editing
+  @type selected_map_object :: %{kind: MapInspection.kind(), item: Poi.t() | Geofence.t()}
 
   @impl Phoenix.LiveView
-  def mount(%{"event_id" => event_id}, _session, socket) do
-    actor = socket.assigns.current_user
+  def mount(params, session, socket) do
+    session = if is_map(session), do: session, else: %{}
 
-    case load_event(event_id, actor) do
-      {:ok, event} ->
-        {pois, geofences, entries} = load_map_data(event_id, actor)
+    event_id = Map.get(params, "event_id") || Map.get(session, "event_id")
+    actor = socket.assigns[:current_user] || Map.get(session, "current_user")
 
-        socket =
-          socket
-          |> assign(:event, event)
-          |> assign(:pois, pois)
-          |> assign(:geofences, geofences)
-          |> stream(:entries, entries)
-          |> assign(:unread_count, 0)
-          |> assign(:drawer_open, false)
-          |> assign(:pmtiles_url, @pmtiles_url)
-          |> assign(:poi_step, :idle)
-          |> assign(:poi_location, nil)
-          |> assign(:poi_name, "")
-          |> assign(:poi_description, "")
-          |> assign(:poi_category, "viewpoint")
-          |> assign(:poi_errors, [])
-          |> assign(:poi_categories, @poi_categories)
-          |> assign(:geofence_step, :idle)
-          |> assign(:geofence_vertices, [])
-          |> assign(:geofence_geometry, nil)
-          |> assign(:geofence_name, "")
-          |> assign(:geofence_purpose, "boundary")
-          |> assign(:geofence_color, Map.fetch!(@purpose_colors, "boundary"))
-          |> assign(:geofence_errors, [])
-          |> assign(:geofence_purposes, @geofence_purposes)
-          |> assign(:purpose_colors, @purpose_colors)
-          |> allow_upload(:photos,
-            accept: ~w(.jpg .jpeg .png .webp),
-            max_entries: 5,
-            max_file_size: 10_000_000
-          )
+    if is_nil(event_id) or is_nil(actor) do
+      {:ok,
+       socket
+       |> put_flash(:error, "Event not found or you are not a member.")
+       |> push_navigate(to: ~p"/")}
+    else
+      case load_event(event_id, actor) do
+        {:ok, event} ->
+          {pois, geofences, entries} = load_map_data(event_id, actor)
 
-        socket =
-          if connected?(socket) do
-            Phoenix.PubSub.subscribe(Platser.PubSub, "event:#{event_id}:map_objects")
-            Phoenix.PubSub.subscribe(Platser.PubSub, "event:#{event_id}:activity")
-            Phoenix.PubSub.subscribe(Platser.PubSub, EventPresence.topic(event_id))
-            send(self(), :push_map_init)
+          socket =
             socket
-          else
-            socket
-          end
+            |> assign(:event, event)
+            |> assign(:pois, pois)
+            |> assign(:geofences, geofences)
+            |> stream(:entries, entries)
+            |> assign(:unread_count, 0)
+            |> assign(:drawer_open, false)
+            |> assign(:pmtiles_url, @pmtiles_url)
+            |> assign(:poi_step, :idle)
+            |> assign(:poi_location, nil)
+            |> assign(:poi_name, "")
+            |> assign(:poi_description, "")
+            |> assign(:poi_category, "viewpoint")
+            |> assign(:poi_errors, [])
+            |> assign(:poi_categories, @poi_categories)
+            |> assign(:geofence_step, :idle)
+            |> assign(:geofence_vertices, [])
+            |> assign(:geofence_geometry, nil)
+            |> assign(:geofence_name, "")
+            |> assign(:geofence_purpose, "boundary")
+            |> assign(:geofence_color, Map.fetch!(@purpose_colors, "boundary"))
+            |> assign(:geofence_errors, [])
+            |> assign(:geofence_purposes, @geofence_purposes)
+            |> assign(:purpose_colors, @purpose_colors)
+            |> assign(:selected_map_object, nil)
+            |> assign(:selected_map_object_can_manage, false)
+            |> allow_upload(:photos,
+              accept: ~w(.jpg .jpeg .png .webp),
+              max_entries: 5,
+              max_file_size: 10_000_000
+            )
 
-        {:ok,
-         socket
-         |> assign(:sharing?, false)
-         |> assign(:location_tracked?, false)}
+          socket =
+            if connected?(socket) do
+              Phoenix.PubSub.subscribe(Platser.PubSub, "event:#{event_id}:map_objects")
+              Phoenix.PubSub.subscribe(Platser.PubSub, "event:#{event_id}:activity")
+              Phoenix.PubSub.subscribe(Platser.PubSub, EventPresence.topic(event_id))
+              send(self(), :push_map_init)
+              socket
+            else
+              socket
+            end
 
-      {:error, :not_found} ->
-        {:ok,
-         socket
-         |> put_flash(:error, "Event not found or you are not a member.")
-         |> push_navigate(to: ~p"/")}
+          {:ok,
+           socket
+           |> assign(:sharing?, false)
+           |> assign(:location_tracked?, false)}
+
+        {:error, :not_found} ->
+          {:ok,
+           socket
+           |> put_flash(:error, "Event not found or you are not a member.")
+           |> push_navigate(to: ~p"/")}
+      end
     end
   end
 
@@ -122,7 +136,8 @@ defmodule PlatserWeb.MapLive do
           user_id: user_id,
           lat: meta.lat,
           lng: meta.lng,
-          display_name: Map.get(meta, :display_name, "")
+          display_name: Map.get(meta, :display_name, ""),
+          is_simulated: Map.get(meta, :is_simulated, false)
         }
       end)
 
@@ -182,7 +197,8 @@ defmodule PlatserWeb.MapLive do
             user_id: user_id,
             lat: meta.lat,
             lng: meta.lng,
-            display_name: Map.get(meta, :display_name, "")
+            display_name: Map.get(meta, :display_name, ""),
+            is_simulated: Map.get(meta, :is_simulated, false)
           })
         else
           acc
@@ -200,7 +216,8 @@ defmodule PlatserWeb.MapLive do
                 user_id: user_id,
                 lat: latest.lat,
                 lng: latest.lng,
-                display_name: Map.get(latest, :display_name, "")
+                display_name: Map.get(latest, :display_name, ""),
+                is_simulated: Map.get(latest, :is_simulated, false)
               })
 
             _ ->
@@ -275,6 +292,8 @@ defmodule PlatserWeb.MapLive do
   def handle_event("open_poi_form", _params, socket) do
     socket =
       socket
+      |> assign(:selected_map_object, nil)
+      |> assign(:selected_map_object_can_manage, false)
       |> assign(:poi_step, :picking)
       |> assign(:poi_location, nil)
       |> assign(:poi_name, "")
@@ -288,6 +307,46 @@ defmodule PlatserWeb.MapLive do
 
   def handle_event("cancel_poi_form", _params, socket) do
     {:noreply, reset_poi_form(socket)}
+  end
+
+  def handle_event("inspect_map_object", %{"kind" => kind, "id" => id}, socket) do
+    actor = socket.assigns.current_user
+
+    case load_selected_map_object(kind, id, actor) do
+      {:ok, selected_map_object} ->
+        {:noreply,
+         socket
+         |> assign(:selected_map_object, selected_map_object)
+         |> assign(
+           :selected_map_object_can_manage,
+           can_manage_selected_map_object?(selected_map_object.item, actor)
+         )}
+
+      {:error, :not_found} ->
+        {:noreply,
+         socket
+         |> assign(:selected_map_object, nil)
+         |> assign(:selected_map_object_can_manage, false)
+         |> put_flash(:error, "Could not load that map item")}
+    end
+  end
+
+  def handle_event("clear_map_object_inspection", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected_map_object, nil)
+     |> assign(:selected_map_object_can_manage, false)}
+  end
+
+  def handle_event("focus_selected_map_object", _params, socket) do
+    case socket.assigns.selected_map_object do
+      nil ->
+        {:noreply, socket}
+
+      selected_map_object ->
+        {:noreply,
+         push_event(socket, "focus_map_object", focus_map_object_payload(selected_map_object))}
+    end
   end
 
   def handle_event("cancel_upload", %{"ref" => ref}, socket) do
@@ -328,6 +387,8 @@ defmodule PlatserWeb.MapLive do
   def handle_event("open_geofence_form", _params, socket) do
     {:noreply,
      socket
+     |> assign(:selected_map_object, nil)
+     |> assign(:selected_map_object_can_manage, false)
      |> assign(:geofence_step, :drawing)
      |> assign(:geofence_vertices, [])
      |> assign(:geofence_geometry, nil)
@@ -340,6 +401,106 @@ defmodule PlatserWeb.MapLive do
 
   def handle_event("cancel_geofence_form", _params, socket) do
     {:noreply, reset_geofence_form(socket)}
+  end
+
+  def handle_event("publish_selected_map_object", _params, socket) do
+    case socket.assigns.selected_map_object do
+      %{kind: :poi, item: %Poi{} = poi} ->
+        case PlatserMap.publish_poi(poi, actor: socket.assigns.current_user) do
+          {:ok, published} ->
+            {:noreply,
+             socket
+             |> assign(:selected_map_object, %{kind: :poi, item: published})
+             |> assign(
+               :selected_map_object_can_manage,
+               can_manage_selected_map_object?(published, socket.assigns.current_user)
+             )
+             |> push_event("poi_updated", poi_to_feature(published))
+             |> put_flash(:info, "POI published!")}
+
+          {:error, %Ash.Error.Invalid{} = err} ->
+            msg = Ash.Error.to_error_class(err).message || "Could not publish POI"
+            {:noreply, put_flash(socket, :error, msg)}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not publish POI")}
+        end
+
+      %{kind: :geofence, item: %Geofence{} = geofence} ->
+        case PlatserMap.publish_geofence(geofence, actor: socket.assigns.current_user) do
+          {:ok, published} ->
+            {:noreply,
+             socket
+             |> assign(:selected_map_object, %{kind: :geofence, item: published})
+             |> assign(
+               :selected_map_object_can_manage,
+               can_manage_selected_map_object?(published, socket.assigns.current_user)
+             )
+             |> push_event("geofence_updated", geofence_to_feature(published))
+             |> put_flash(:info, "Geofence published!")}
+
+          {:error, %Ash.Error.Invalid{} = err} ->
+            msg = Ash.Error.to_error_class(err).message || "Could not publish geofence"
+            {:noreply, put_flash(socket, :error, msg)}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not publish geofence")}
+        end
+
+      nil ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("delete_selected_map_object", _params, socket) do
+    case socket.assigns.selected_map_object do
+      %{kind: :poi, item: %Poi{} = poi} ->
+        case PlatserMap.delete_poi(poi, actor: socket.assigns.current_user) do
+          :ok ->
+            {:noreply,
+             socket
+             |> assign(:selected_map_object, nil)
+             |> assign(:selected_map_object_can_manage, false)
+             |> push_event("poi_removed", %{"id" => poi.id})
+             |> put_flash(:info, "POI deleted")}
+
+          {:ok, _deleted} ->
+            {:noreply,
+             socket
+             |> assign(:selected_map_object, nil)
+             |> assign(:selected_map_object_can_manage, false)
+             |> push_event("poi_removed", %{"id" => poi.id})
+             |> put_flash(:info, "POI deleted")}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not delete POI")}
+        end
+
+      %{kind: :geofence, item: %Geofence{} = geofence} ->
+        case PlatserMap.delete_geofence(geofence, actor: socket.assigns.current_user) do
+          :ok ->
+            {:noreply,
+             socket
+             |> assign(:selected_map_object, nil)
+             |> assign(:selected_map_object_can_manage, false)
+             |> push_event("geofence_removed", %{"id" => geofence.id})
+             |> put_flash(:info, "Geofence deleted")}
+
+          {:ok, _deleted} ->
+            {:noreply,
+             socket
+             |> assign(:selected_map_object, nil)
+             |> assign(:selected_map_object_can_manage, false)
+             |> push_event("geofence_removed", %{"id" => geofence.id})
+             |> put_flash(:info, "Geofence deleted")}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not delete geofence")}
+        end
+
+      nil ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("vertex_added", %{"vertices" => vertices}, socket) do
@@ -551,6 +712,71 @@ defmodule PlatserWeb.MapLive do
     |> push_event("disable_draw_mode", %{})
   end
 
+  @spec load_selected_map_object(String.t(), String.t(), Platser.Accounts.User.t()) ::
+          {:ok, selected_map_object()} | {:error, :not_found}
+  defp load_selected_map_object("poi", id, actor) do
+    case PlatserMap.get_poi(id, actor: actor) do
+      {:ok, %Poi{} = poi} -> {:ok, %{kind: :poi, item: poi}}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp load_selected_map_object("geofence", id, actor) do
+    case PlatserMap.get_geofence(id, actor: actor) do
+      {:ok, %Geofence{} = geofence} -> {:ok, %{kind: :geofence, item: geofence}}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp load_selected_map_object(_, _, _), do: {:error, :not_found}
+
+  @spec focus_map_object_payload(selected_map_object()) :: map()
+  defp focus_map_object_payload(%{kind: :poi, item: %Poi{} = poi}) do
+    %{
+      kind: "poi",
+      geometry: Geo.JSON.encode!(poi.location)
+    }
+  end
+
+  defp focus_map_object_payload(%{kind: :geofence, item: %Geofence{} = geofence}) do
+    %{
+      kind: "geofence",
+      geometry: Geo.JSON.encode!(geofence.geometry)
+    }
+  end
+
+  @spec can_manage_selected_map_object?(Poi.t() | Geofence.t(), Platser.Accounts.User.t() | nil) ::
+          boolean()
+  defp can_manage_selected_map_object?(_item, nil), do: false
+
+  defp can_manage_selected_map_object?(%{creator_id: creator_id, event_id: event_id}, actor) do
+    creator_id == actor.id or admin_member?(event_id, actor.id, actor)
+  end
+
+  @spec admin_member?(Ecto.UUID.t(), Ecto.UUID.t(), Platser.Accounts.User.t()) :: boolean()
+  defp admin_member?(event_id, user_id, actor) do
+    case Platser.Events.list_memberships_for_event(event_id, actor: actor) do
+      {:ok, memberships} ->
+        Enum.any?(memberships, fn membership ->
+          membership.user_id == user_id and membership.role == :admin
+        end)
+
+      {:error, _} ->
+        false
+    end
+  end
+
+  @spec map_item_icon(MapInspection.kind()) :: String.t()
+  defp map_item_icon(:poi), do: "hero-map-pin"
+  defp map_item_icon(:geofence), do: "hero-map"
+
+  @spec geofence_vertex_count(Geo.Polygon.t()) :: non_neg_integer()
+  defp geofence_vertex_count(%Geo.Polygon{coordinates: [ring | _]}) do
+    max(length(ring) - 1, 0)
+  end
+
+  defp geofence_vertex_count(_), do: 0
+
   @spec submit_geofence(map(), boolean(), Phoenix.LiveView.Socket.t()) ::
           {:noreply, Phoenix.LiveView.Socket.t()}
   defp submit_geofence(params, publish?, socket) do
@@ -738,7 +964,8 @@ defmodule PlatserWeb.MapLive do
       <%!-- Floating action buttons (bottom-right) --%>
       <div class={[
         "fixed bottom-24 right-4 z-20 flex flex-col gap-3 transition-all duration-300",
-        (@poi_step != :idle or @geofence_step != :idle) && "opacity-0 pointer-events-none"
+        (@poi_step != :idle or @geofence_step != :idle or @selected_map_object) &&
+          "opacity-0 pointer-events-none"
       ]}>
         <%!-- Share location toggle --%>
         <button
@@ -1166,6 +1393,159 @@ defmodule PlatserWeb.MapLive do
         </div>
       </div>
 
+      <%!-- Map item inspection drawer --%>
+      <%= if @selected_map_object do %>
+        <% kind = @selected_map_object.kind %>
+        <% item = @selected_map_object.item %>
+        <div
+          id="map-item-drawer"
+          class={[
+            "fixed z-30 transform transition-all duration-300 ease-in-out",
+            "bottom-0 left-0 right-0 md:top-0 md:bottom-0 md:left-auto md:right-0 md:w-96",
+            "translate-y-0 md:translate-x-0"
+          ]}
+        >
+          <div class="bg-white rounded-t-2xl border-t border-gray-200 shadow-2xl flex flex-col md:rounded-none md:rounded-l-2xl md:border-l md:border-y md:border-r-0 md:h-full">
+            <div class="flex items-start justify-between gap-4 px-5 pt-4 pb-3 border-b border-gray-100 shrink-0">
+              <div class="flex items-start gap-3 min-w-0">
+                <div class="w-11 h-11 rounded-2xl bg-gray-100 flex items-center justify-center shrink-0">
+                  <.icon name={map_item_icon(kind)} class="w-5 h-5 text-gray-600" />
+                </div>
+                <div class="min-w-0">
+                  <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    {MapInspection.kind_label(kind)}
+                  </p>
+                  <h2 class="text-base font-semibold text-gray-900 truncate">
+                    {item.name}
+                  </h2>
+                </div>
+              </div>
+              <button
+                id="map-item-close-btn"
+                phx-click="clear_map_object_inspection"
+                class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors shrink-0"
+              >
+                <.icon name="hero-x-mark" class="w-4 h-4 text-gray-500" />
+              </button>
+            </div>
+
+            <div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+              <div class="flex flex-wrap gap-2">
+                <span
+                  id="map-item-status-badge"
+                  class={[
+                    "inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold",
+                    if(MapInspection.resource_status(item) == :published,
+                      do: "bg-emerald-50 text-emerald-700",
+                      else: "bg-amber-50 text-amber-700"
+                    )
+                  ]}
+                >
+                  {MapInspection.status_label(MapInspection.resource_visibility(item))}
+                </span>
+                <span
+                  id="map-item-visibility-badge"
+                  class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700"
+                >
+                  {MapInspection.visibility_label(MapInspection.resource_visibility(item))}
+                </span>
+                <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">
+                  {MapInspection.kind_label(kind)}
+                </span>
+              </div>
+
+              <%= if kind == :poi and item.description && item.description != "" do %>
+                <div>
+                  <p class="text-sm text-gray-600 leading-relaxed">{item.description}</p>
+                </div>
+              <% end %>
+
+              <div class="grid grid-cols-1 gap-3">
+                <%= if kind == :poi do %>
+                  <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
+                      Category
+                    </p>
+                    <p class="text-sm font-medium text-gray-900 capitalize">
+                      {item.category |> to_string() |> String.replace("_", " ")}
+                    </p>
+                  </div>
+                  <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
+                      Location
+                    </p>
+                    <p class="text-sm font-medium text-gray-900">
+                      {format_coords(item.location)}
+                    </p>
+                  </div>
+                <% else %>
+                  <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
+                      Purpose
+                    </p>
+                    <p class="text-sm font-medium text-gray-900 capitalize">
+                      {item.purpose |> to_string() |> String.replace("_", " ")}
+                    </p>
+                  </div>
+                  <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
+                      Geometry
+                    </p>
+                    <p class="text-sm font-medium text-gray-900">
+                      {geofence_vertex_count(item.geometry)} vertices
+                    </p>
+                  </div>
+                <% end %>
+              </div>
+
+              <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+                  Review
+                </p>
+                <p class="text-sm text-gray-700 leading-relaxed">
+                  <%= if MapInspection.resource_status(item) == :published do %>
+                    This item is public and visible to event members.
+                  <% else %>
+                    This item is still a draft and only visible to you and event admins.
+                  <% end %>
+                </p>
+              </div>
+            </div>
+
+            <div class="border-t border-gray-100 px-5 py-4 shrink-0">
+              <div class="flex gap-2">
+                <button
+                  id="map-item-focus-btn"
+                  phx-click="focus_selected_map_object"
+                  class="flex-1 py-2.5 rounded-xl border border-gray-300 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 active:scale-95 transition-all"
+                >
+                  Focus on map
+                </button>
+
+                <%= if @selected_map_object_can_manage do %>
+                  <%= if MapInspection.resource_status(item) == :draft do %>
+                    <button
+                      id="map-item-publish-btn"
+                      phx-click="publish_selected_map_object"
+                      class="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 active:scale-95 transition-all"
+                    >
+                      Publish
+                    </button>
+                  <% end %>
+                  <button
+                    id="map-item-delete-btn"
+                    phx-click="delete_selected_map_object"
+                    class="flex-1 py-2.5 rounded-xl border border-red-200 bg-red-50 text-sm font-semibold text-red-700 hover:bg-red-100 active:scale-95 transition-all"
+                  >
+                    Delete
+                  </button>
+                <% end %>
+              </div>
+            </div>
+          </div>
+        </div>
+      <% end %>
+
       <%!-- Activity feed — mobile: slide-up drawer, desktop: right side panel --%>
       <div
         id="activity-drawer"
@@ -1173,7 +1553,8 @@ defmodule PlatserWeb.MapLive do
           "fixed z-20 transform transition-all duration-300 ease-in-out",
           "bottom-0 left-0 right-0",
           "md:top-0 md:bottom-0 md:left-auto md:right-0 md:w-80",
-          (@poi_step != :idle or @geofence_step != :idle) && "opacity-0 pointer-events-none",
+          (@poi_step != :idle or @geofence_step != :idle or @selected_map_object) &&
+            "opacity-0 pointer-events-none",
           if(@drawer_open,
             do: "translate-y-0 md:translate-x-0",
             else: "translate-y-[calc(100%-3.5rem)] md:translate-y-0 md:translate-x-full"
@@ -1225,7 +1606,10 @@ defmodule PlatserWeb.MapLive do
             phx-update="stream"
             class="px-4 pb-6 pt-2 max-h-72 md:max-h-none md:flex-1 overflow-y-auto"
           >
-            <div class="hidden only:block text-center text-sm text-gray-400 py-8">
+            <div
+              id="activity-entries-empty"
+              class="hidden only:block text-center text-sm text-gray-400 py-8"
+            >
               No activity yet. Start exploring!
             </div>
             <div

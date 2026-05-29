@@ -66,3 +66,26 @@ Seeds complete!
   Join code:      #{event.join_code}
   Map URL:        /events/#{event.id}/map
 """)
+
+simulated_users = [
+  {"sim-1@dev.local", "Sim One"},
+  {"sim-2@dev.local", "Sim Two"},
+  {"sim-3@dev.local", "Sim Three"}
+]
+
+for {email, display_name} <- simulated_users do
+  case Platser.Accounts.User
+       |> Ash.Query.filter(email == ^email)
+       |> Ash.read_one(authorize?: false) do
+    {:ok, nil} ->
+      Platser.Accounts.User
+      |> Ash.Changeset.for_create(:create_simulated, %{
+        email: email,
+        display_name: display_name
+      })
+      |> Ash.create!(authorize?: false)
+
+    {:ok, _existing} ->
+      :ok
+  end
+end
