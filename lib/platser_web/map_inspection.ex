@@ -42,5 +42,5 @@ defmodule PlatserWeb.MapInspection do
 
   @spec manage_actions(visibility()) :: [action()]
   defp manage_actions(:private), do: [:edit, :publish, :delete]
-  defp manage_actions(:public), do: [:delete]
+  defp manage_actions(:public), do: [:edit, :delete]
 end

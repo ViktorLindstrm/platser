@@ -63,6 +63,15 @@ defmodule Platser.Map.Geofence do
       end
     end
 
+    update :update_metadata do
+      accept [:name, :color]
+      require_atomic? false
+
+      validate fn changeset, _ ->
+        validate_color(Ash.Changeset.get_attribute(changeset, :color))
+      end
+    end
+
     destroy :destroy do
       primary? true
     end
@@ -82,6 +91,11 @@ defmodule Platser.Map.Geofence do
     end
 
     policy action(:update) do
+      authorize_if expr(creator_id == ^actor(:id))
+      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
+    end
+
+    policy action(:update_metadata) do
       authorize_if expr(creator_id == ^actor(:id))
       authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
     end

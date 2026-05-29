@@ -45,6 +45,7 @@ defmodule PlatserWeb.MapLive do
 
   @type poi_step :: :idle | :picking | :editing
   @type geofence_step :: :idle | :drawing | :editing
+  @type editing_published :: boolean()
   @type selected_map_object :: %{
           kind: MapInspection.kind(),
           item: Poi.t() | Geofence.t(),
@@ -99,7 +100,9 @@ defmodule PlatserWeb.MapLive do
             |> assign(:selected_map_object, nil)
             |> assign(:selected_map_object_can_manage, false)
             |> assign(:editing_poi_id, nil)
+            |> assign(:editing_poi_published, false)
             |> assign(:editing_geofence_id, nil)
+            |> assign(:editing_geofence_published, false)
             |> allow_upload(:photos,
               accept: ~w(.jpg .jpeg .png .webp),
               max_entries: 5,
@@ -398,7 +401,9 @@ defmodule PlatserWeb.MapLive do
          |> assign(:selected_map_object, nil)
          |> assign(:selected_map_object_can_manage, false)
          |> assign(:editing_poi_id, poi.id)
+         |> assign(:editing_poi_published, poi.visibility == :public)
          |> assign(:editing_geofence_id, nil)
+         |> assign(:editing_geofence_published, false)
          |> assign(:geofence_step, :idle)
          |> assign(:poi_step, :editing)
          |> assign(:poi_location, poi.location)
@@ -413,7 +418,9 @@ defmodule PlatserWeb.MapLive do
          |> assign(:selected_map_object, nil)
          |> assign(:selected_map_object_can_manage, false)
          |> assign(:editing_geofence_id, geofence.id)
+         |> assign(:editing_geofence_published, geofence.visibility == :public)
          |> assign(:editing_poi_id, nil)
+         |> assign(:editing_poi_published, false)
          |> assign(:poi_step, :idle)
          |> assign(:geofence_step, :editing)
          |> assign(:geofence_vertices, [])
@@ -447,11 +454,19 @@ defmodule PlatserWeb.MapLive do
   end
 
   def handle_event("validate_poi", %{"poi" => params}, socket) do
-    {:noreply,
-     socket
-     |> assign(:poi_name, params["name"] || "")
-     |> assign(:poi_description, params["description"] || "")
-     |> assign(:poi_category, params["category"] || "viewpoint")}
+    socket =
+      socket
+      |> assign(:poi_name, params["name"] || "")
+      |> assign(:poi_description, params["description"] || "")
+
+    socket =
+      if Map.has_key?(params, "category") do
+        assign(socket, :poi_category, params["category"])
+      else
+        socket
+      end
+
+    {:noreply, socket}
   end
 
   def handle_event("save_poi", %{"poi" => params} = event_params, socket) do
@@ -629,26 +644,41 @@ defmodule PlatserWeb.MapLive do
   defp submit_poi(params, publish?, socket) do
     actor = socket.assigns.current_user
     event = socket.assigns.event
-    location = socket.assigns.poi_location
 
-    errors = validate_poi_params(params, location)
+    if socket.assigns.editing_poi_published do
+      name = String.trim(params["name"] || "")
 
-    if errors != [] do
-      {:noreply, assign(socket, :poi_errors, errors)}
+      if name == "" do
+        {:noreply, assign(socket, :poi_errors, [{"name", "can't be blank"}])}
+      else
+        poi_attrs = %{name: name, description: params["description"]}
+
+        case socket.assigns.editing_poi_id do
+          nil -> {:noreply, socket}
+          poi_id -> do_update_poi(poi_id, poi_attrs, false, socket, actor)
+        end
+      end
     else
-      poi_attrs = %{
-        name: String.trim(params["name"]),
-        description: params["description"],
-        category: String.to_existing_atom(params["category"]),
-        location: location
-      }
+      location = socket.assigns.poi_location
+      errors = validate_poi_params(params, location)
 
-      case socket.assigns.editing_poi_id do
-        nil ->
-          do_create_poi(Map.put(poi_attrs, :event_id, event.id), publish?, socket, actor)
+      if errors != [] do
+        {:noreply, assign(socket, :poi_errors, errors)}
+      else
+        poi_attrs = %{
+          name: String.trim(params["name"]),
+          description: params["description"],
+          category: String.to_existing_atom(params["category"]),
+          location: location
+        }
 
-        poi_id ->
-          do_update_poi(poi_id, poi_attrs, publish?, socket, actor)
+        case socket.assigns.editing_poi_id do
+          nil ->
+            do_create_poi(Map.put(poi_attrs, :event_id, event.id), publish?, socket, actor)
+
+          poi_id ->
+            do_update_poi(poi_id, poi_attrs, publish?, socket, actor)
+        end
       end
     end
   end
@@ -706,42 +736,91 @@ defmodule PlatserWeb.MapLive do
   defp do_update_poi(poi_id, attrs, publish?, socket, actor) do
     case PlatserMap.get_poi(poi_id, actor: actor) do
       {:ok, poi} ->
-        case PlatserMap.update_poi(poi, attrs, actor: actor) do
-          {:ok, updated} ->
-            socket =
-              if publish? do
-                case PlatserMap.publish_poi(updated, actor: actor) do
-                  {:ok, published} ->
-                    socket
-                    |> reset_poi_form()
-                    |> push_event("poi_updated", poi_to_feature(published))
-                    |> put_flash(:info, "POI updated and published!")
-
-                  {:error, _} ->
-                    socket
-                    |> reset_poi_form()
-                    |> push_event("poi_updated", poi_to_feature(updated))
-                    |> put_flash(:info, "POI saved.")
-                end
-              else
-                socket
-                |> reset_poi_form()
-                |> push_event("poi_updated", poi_to_feature(updated))
-                |> put_flash(:info, "POI saved.")
-              end
-
-            {:noreply, socket}
-
-          {:error, %Ash.Error.Invalid{} = err} ->
-            errors = format_ash_errors(err)
-            {:noreply, assign(socket, :poi_errors, errors)}
-
-          {:error, _} ->
-            {:noreply, assign(socket, :poi_errors, [{"base", "Could not update POI"}])}
+        if poi.visibility == :public do
+          do_update_poi_metadata(poi, attrs, socket, actor)
+        else
+          do_update_poi_draft(poi, attrs, publish?, socket, actor)
         end
 
       {:error, _} ->
         {:noreply, assign(socket, :poi_errors, [{"base", "POI not found or was deleted"}])}
+    end
+  end
+
+  @spec do_update_poi_metadata(
+          Platser.Map.Poi.t(),
+          map(),
+          Phoenix.LiveView.Socket.t(),
+          Platser.Accounts.User.t()
+        ) :: {:noreply, Phoenix.LiveView.Socket.t()}
+  defp do_update_poi_metadata(poi, attrs, socket, actor) do
+    case PlatserMap.update_poi_metadata(poi, attrs, actor: actor) do
+      {:ok, updated} ->
+        Phoenix.PubSub.broadcast(
+          Platser.PubSub,
+          "event:#{updated.event_id}:map_objects",
+          {:poi_updated, updated}
+        )
+
+        {:noreply,
+         socket
+         |> reset_poi_form()
+         |> select_map_object(:poi, updated)
+         |> push_event("poi_updated", poi_to_feature(updated))
+         |> put_flash(:info, "POI updated.")}
+
+      {:error, %Ash.Error.Invalid{} = err} ->
+        errors = format_ash_errors(err)
+        {:noreply, assign(socket, :poi_errors, errors)}
+
+      {:error, _} ->
+        {:noreply, assign(socket, :poi_errors, [{"base", "Could not update POI"}])}
+    end
+  end
+
+  @spec do_update_poi_draft(
+          Platser.Map.Poi.t(),
+          map(),
+          boolean(),
+          Phoenix.LiveView.Socket.t(),
+          Platser.Accounts.User.t()
+        ) :: {:noreply, Phoenix.LiveView.Socket.t()}
+  defp do_update_poi_draft(poi, attrs, publish?, socket, actor) do
+    case PlatserMap.update_poi(poi, attrs, actor: actor) do
+      {:ok, updated} ->
+        socket =
+          if publish? do
+            case PlatserMap.publish_poi(updated, actor: actor) do
+              {:ok, published} ->
+                socket
+                |> reset_poi_form()
+                |> select_map_object(:poi, published)
+                |> push_event("poi_updated", poi_to_feature(published))
+                |> put_flash(:info, "POI updated and published!")
+
+              {:error, _} ->
+                socket
+                |> reset_poi_form()
+                |> select_map_object(:poi, updated)
+                |> push_event("poi_updated", poi_to_feature(updated))
+                |> put_flash(:info, "POI saved.")
+            end
+          else
+            socket
+            |> reset_poi_form()
+            |> select_map_object(:poi, updated)
+            |> push_event("poi_updated", poi_to_feature(updated))
+            |> put_flash(:info, "POI saved.")
+          end
+
+        {:noreply, socket}
+
+      {:error, %Ash.Error.Invalid{} = err} ->
+        errors = format_ash_errors(err)
+        {:noreply, assign(socket, :poi_errors, errors)}
+
+      {:error, _} ->
+        {:noreply, assign(socket, :poi_errors, [{"base", "Could not update POI"}])}
     end
   end
 
@@ -826,6 +905,7 @@ defmodule PlatserWeb.MapLive do
     |> assign(:poi_category, "viewpoint")
     |> assign(:poi_errors, [])
     |> assign(:editing_poi_id, nil)
+    |> assign(:editing_poi_published, false)
     |> push_event("disable_location_pick", %{})
   end
 
@@ -840,6 +920,7 @@ defmodule PlatserWeb.MapLive do
     |> assign(:geofence_color, Map.fetch!(@purpose_colors, "boundary"))
     |> assign(:geofence_errors, [])
     |> assign(:editing_geofence_id, nil)
+    |> assign(:editing_geofence_published, false)
     |> push_event("disable_draw_mode", %{})
   end
 
@@ -962,33 +1043,51 @@ defmodule PlatserWeb.MapLive do
   defp submit_geofence(params, publish?, socket) do
     actor = socket.assigns.current_user
     event = socket.assigns.event
-    geometry = socket.assigns.geofence_geometry
 
-    errors = validate_geofence_params(params, geometry)
+    if socket.assigns.editing_geofence_published do
+      name = String.trim(params["name"] || "")
 
-    if errors != [] do
-      {:noreply, assign(socket, :geofence_errors, errors)}
+      if name == "" do
+        {:noreply, assign(socket, :geofence_errors, [{"name", "can't be blank"}])}
+      else
+        geofence_attrs = %{
+          name: name,
+          color: params["color"] || socket.assigns.geofence_color
+        }
+
+        case socket.assigns.editing_geofence_id do
+          nil -> {:noreply, socket}
+          geofence_id -> do_update_geofence(geofence_id, geofence_attrs, false, socket, actor)
+        end
+      end
     else
-      case socket.assigns.editing_geofence_id do
-        nil ->
-          geofence_params = %{
-            name: String.trim(params["name"]),
-            purpose: String.to_existing_atom(params["purpose"]),
-            color: params["color"],
-            geometry: geometry,
-            event_id: event.id
-          }
+      geometry = socket.assigns.geofence_geometry
+      errors = validate_geofence_params(params, geometry)
 
-          do_create_geofence(geofence_params, publish?, socket, actor)
+      if errors != [] do
+        {:noreply, assign(socket, :geofence_errors, errors)}
+      else
+        case socket.assigns.editing_geofence_id do
+          nil ->
+            geofence_params = %{
+              name: String.trim(params["name"]),
+              purpose: String.to_existing_atom(params["purpose"]),
+              color: params["color"],
+              geometry: geometry,
+              event_id: event.id
+            }
 
-        geofence_id ->
-          geofence_attrs = %{
-            name: String.trim(params["name"]),
-            purpose: String.to_existing_atom(params["purpose"]),
-            color: params["color"]
-          }
+            do_create_geofence(geofence_params, publish?, socket, actor)
 
-          do_update_geofence(geofence_id, geofence_attrs, publish?, socket, actor)
+          geofence_id ->
+            geofence_attrs = %{
+              name: String.trim(params["name"]),
+              purpose: String.to_existing_atom(params["purpose"]),
+              color: params["color"]
+            }
+
+            do_update_geofence(geofence_id, geofence_attrs, publish?, socket, actor)
+        end
       end
     end
   end
@@ -1050,43 +1149,92 @@ defmodule PlatserWeb.MapLive do
   defp do_update_geofence(geofence_id, attrs, publish?, socket, actor) do
     case PlatserMap.get_geofence(geofence_id, actor: actor) do
       {:ok, geofence} ->
-        case PlatserMap.update_geofence(geofence, attrs, actor: actor) do
-          {:ok, updated} ->
-            socket =
-              if publish? do
-                case PlatserMap.publish_geofence(updated, actor: actor) do
-                  {:ok, published} ->
-                    socket
-                    |> reset_geofence_form()
-                    |> push_event("geofence_updated", geofence_to_feature(published))
-                    |> put_flash(:info, "Geofence updated and published!")
-
-                  {:error, _} ->
-                    socket
-                    |> reset_geofence_form()
-                    |> push_event("geofence_updated", geofence_to_feature(updated))
-                    |> put_flash(:info, "Geofence saved.")
-                end
-              else
-                socket
-                |> reset_geofence_form()
-                |> push_event("geofence_updated", geofence_to_feature(updated))
-                |> put_flash(:info, "Geofence saved.")
-              end
-
-            {:noreply, socket}
-
-          {:error, %Ash.Error.Invalid{} = err} ->
-            errors = format_ash_errors(err)
-            {:noreply, assign(socket, :geofence_errors, errors)}
-
-          {:error, _} ->
-            {:noreply, assign(socket, :geofence_errors, [{"base", "Could not update geofence"}])}
+        if geofence.visibility == :public do
+          do_update_geofence_metadata(geofence, attrs, socket, actor)
+        else
+          do_update_geofence_draft(geofence, attrs, publish?, socket, actor)
         end
 
       {:error, _} ->
         {:noreply,
          assign(socket, :geofence_errors, [{"base", "Geofence not found or was deleted"}])}
+    end
+  end
+
+  @spec do_update_geofence_metadata(
+          Platser.Map.Geofence.t(),
+          map(),
+          Phoenix.LiveView.Socket.t(),
+          Platser.Accounts.User.t()
+        ) :: {:noreply, Phoenix.LiveView.Socket.t()}
+  defp do_update_geofence_metadata(geofence, attrs, socket, actor) do
+    case PlatserMap.update_geofence_metadata(geofence, attrs, actor: actor) do
+      {:ok, updated} ->
+        Phoenix.PubSub.broadcast(
+          Platser.PubSub,
+          "event:#{updated.event_id}:map_objects",
+          {:geofence_updated, updated}
+        )
+
+        {:noreply,
+         socket
+         |> reset_geofence_form()
+         |> select_map_object(:geofence, updated)
+         |> push_event("geofence_updated", geofence_to_feature(updated))
+         |> put_flash(:info, "Geofence updated.")}
+
+      {:error, %Ash.Error.Invalid{} = err} ->
+        errors = format_ash_errors(err)
+        {:noreply, assign(socket, :geofence_errors, errors)}
+
+      {:error, _} ->
+        {:noreply, assign(socket, :geofence_errors, [{"base", "Could not update geofence"}])}
+    end
+  end
+
+  @spec do_update_geofence_draft(
+          Platser.Map.Geofence.t(),
+          map(),
+          boolean(),
+          Phoenix.LiveView.Socket.t(),
+          Platser.Accounts.User.t()
+        ) :: {:noreply, Phoenix.LiveView.Socket.t()}
+  defp do_update_geofence_draft(geofence, attrs, publish?, socket, actor) do
+    case PlatserMap.update_geofence(geofence, attrs, actor: actor) do
+      {:ok, updated} ->
+        socket =
+          if publish? do
+            case PlatserMap.publish_geofence(updated, actor: actor) do
+              {:ok, published} ->
+                socket
+                |> reset_geofence_form()
+                |> select_map_object(:geofence, published)
+                |> push_event("geofence_updated", geofence_to_feature(published))
+                |> put_flash(:info, "Geofence updated and published!")
+
+              {:error, _} ->
+                socket
+                |> reset_geofence_form()
+                |> select_map_object(:geofence, updated)
+                |> push_event("geofence_updated", geofence_to_feature(updated))
+                |> put_flash(:info, "Geofence saved.")
+            end
+          else
+            socket
+            |> reset_geofence_form()
+            |> select_map_object(:geofence, updated)
+            |> push_event("geofence_updated", geofence_to_feature(updated))
+            |> put_flash(:info, "Geofence saved.")
+          end
+
+        {:noreply, socket}
+
+      {:error, %Ash.Error.Invalid{} = err} ->
+        errors = format_ash_errors(err)
+        {:noreply, assign(socket, :geofence_errors, errors)}
+
+      {:error, _} ->
+        {:noreply, assign(socket, :geofence_errors, [{"base", "Could not update geofence"}])}
     end
   end
 
@@ -1302,35 +1450,37 @@ defmodule PlatserWeb.MapLive do
               phx-submit="save_poi"
               class="px-5 py-4 space-y-4"
             >
-              <%!-- Location indicator --%>
-              <div class="flex items-center gap-2">
-                <div class={[
-                  "flex-1 flex items-center gap-2 px-3 py-2 rounded-xl border text-sm",
-                  if(@poi_location,
-                    do: "border-green-300 bg-green-50 text-green-700",
-                    else: "border-gray-200 bg-gray-50 text-gray-500"
-                  )
-                ]}>
-                  <.icon
-                    name={if @poi_location, do: "hero-check-circle", else: "hero-map-pin"}
-                    class="w-4 h-4 shrink-0"
-                  />
-                  <span class="truncate">
-                    <%= if @poi_location do %>
-                      {format_coords(@poi_location)}
-                    <% else %>
-                      No location selected
-                    <% end %>
-                  </span>
+              <%!-- Location indicator (hidden when editing a published POI) --%>
+              <%= if not @editing_poi_published do %>
+                <div class="flex items-center gap-2">
+                  <div class={[
+                    "flex-1 flex items-center gap-2 px-3 py-2 rounded-xl border text-sm",
+                    if(@poi_location,
+                      do: "border-green-300 bg-green-50 text-green-700",
+                      else: "border-gray-200 bg-gray-50 text-gray-500"
+                    )
+                  ]}>
+                    <.icon
+                      name={if @poi_location, do: "hero-check-circle", else: "hero-map-pin"}
+                      class="w-4 h-4 shrink-0"
+                    />
+                    <span class="truncate">
+                      <%= if @poi_location do %>
+                        {format_coords(@poi_location)}
+                      <% else %>
+                        No location selected
+                      <% end %>
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    phx-click="pick_location_again"
+                    class="px-3 py-2 rounded-xl border border-gray-200 bg-white text-sm text-gray-700 hover:bg-gray-50 active:scale-95 transition-all whitespace-nowrap"
+                  >
+                    {if @poi_location, do: "Change", else: "Pick"}
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  phx-click="pick_location_again"
-                  class="px-3 py-2 rounded-xl border border-gray-200 bg-white text-sm text-gray-700 hover:bg-gray-50 active:scale-95 transition-all whitespace-nowrap"
-                >
-                  {if @poi_location, do: "Change", else: "Pick"}
-                </button>
-              </div>
+              <% end %>
 
               <%!-- Form errors --%>
               <%= if @poi_errors != [] do %>
@@ -1374,41 +1524,43 @@ defmodule PlatserWeb.MapLive do
                 >{@poi_description}</textarea>
               </div>
 
-              <%!-- Category --%>
-              <div>
-                <label for="poi-category" class="block text-sm font-medium text-gray-700 mb-2">
-                  Category
-                </label>
-                <div class="grid grid-cols-3 gap-2">
-                  <%= for cat <- @poi_categories do %>
-                    <label class={[
-                      "flex flex-col items-center gap-1 p-2 rounded-xl border cursor-pointer transition-all",
-                      if(to_string(cat) == @poi_category,
-                        do: "border-blue-500 bg-blue-50 text-blue-700",
-                        else: "border-gray-200 bg-white text-gray-600 hover:border-gray-300"
-                      )
-                    ]}>
-                      <input
-                        type="radio"
-                        name="poi[category]"
-                        value={cat}
-                        checked={to_string(cat) == @poi_category}
-                        class="sr-only"
-                      />
-                      <.icon
-                        name={category_icon(cat)}
-                        class={[
-                          "w-5 h-5",
-                          if(to_string(cat) == @poi_category, do: "text-blue-600", else: "")
-                        ]}
-                      />
-                      <span class="text-xs font-medium capitalize">
-                        {cat |> to_string() |> String.replace("_", " ")}
-                      </span>
-                    </label>
-                  <% end %>
+              <%!-- Category (hidden when editing a published POI) --%>
+              <%= if not @editing_poi_published do %>
+                <div>
+                  <label for="poi-category" class="block text-sm font-medium text-gray-700 mb-2">
+                    Category
+                  </label>
+                  <div class="grid grid-cols-3 gap-2">
+                    <%= for cat <- @poi_categories do %>
+                      <label class={[
+                        "flex flex-col items-center gap-1 p-2 rounded-xl border cursor-pointer transition-all",
+                        if(to_string(cat) == @poi_category,
+                          do: "border-blue-500 bg-blue-50 text-blue-700",
+                          else: "border-gray-200 bg-white text-gray-600 hover:border-gray-300"
+                        )
+                      ]}>
+                        <input
+                          type="radio"
+                          name="poi[category]"
+                          value={cat}
+                          checked={to_string(cat) == @poi_category}
+                          class="sr-only"
+                        />
+                        <.icon
+                          name={category_icon(cat)}
+                          class={[
+                            "w-5 h-5",
+                            if(to_string(cat) == @poi_category, do: "text-blue-600", else: "")
+                          ]}
+                        />
+                        <span class="text-xs font-medium capitalize">
+                          {cat |> to_string() |> String.replace("_", " ")}
+                        </span>
+                      </label>
+                    <% end %>
+                  </div>
                 </div>
-              </div>
+              <% end %>
 
               <%!-- Photos (new POI only) --%>
               <%= if is_nil(@editing_poi_id) do %>
@@ -1469,14 +1621,16 @@ defmodule PlatserWeb.MapLive do
                 >
                   {if @editing_poi_id, do: "Save", else: "Save draft"}
                 </button>
-                <button
-                  type="submit"
-                  name="publish"
-                  value="true"
-                  class="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 active:scale-95 transition-all"
-                >
-                  {if @editing_poi_id, do: "Save & Publish", else: "Publish"}
-                </button>
+                <%= if not @editing_poi_published do %>
+                  <button
+                    type="submit"
+                    name="publish"
+                    value="true"
+                    class="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 active:scale-95 transition-all"
+                  >
+                    {if @editing_poi_id, do: "Save & Publish", else: "Publish"}
+                  </button>
+                <% end %>
               </div>
             </.form>
           </div>
@@ -1564,42 +1718,44 @@ defmodule PlatserWeb.MapLive do
                 />
               </div>
 
-              <%!-- Purpose --%>
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">Purpose</label>
-                <div class="grid grid-cols-3 gap-2">
-                  <%= for purpose <- @geofence_purposes do %>
-                    <label class={[
-                      "flex flex-col items-center gap-1 p-2 rounded-xl border cursor-pointer transition-all",
-                      if(to_string(purpose) == @geofence_purpose,
-                        do: "border-indigo-500 bg-indigo-50 text-indigo-700",
-                        else: "border-gray-200 bg-white text-gray-600 hover:border-gray-300"
-                      )
-                    ]}>
-                      <input
-                        type="radio"
-                        name="geofence[purpose]"
-                        value={purpose}
-                        checked={to_string(purpose) == @geofence_purpose}
-                        class="sr-only"
-                      />
-                      <.icon
-                        name={purpose_icon(purpose)}
-                        class={[
-                          "w-5 h-5",
-                          if(to_string(purpose) == @geofence_purpose,
-                            do: "text-indigo-600",
-                            else: ""
-                          )
-                        ]}
-                      />
-                      <span class="text-xs font-medium capitalize leading-tight text-center">
-                        {purpose |> to_string() |> String.replace("_", " ")}
-                      </span>
-                    </label>
-                  <% end %>
+              <%!-- Purpose (hidden when editing a published geofence) --%>
+              <%= if not @editing_geofence_published do %>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-2">Purpose</label>
+                  <div class="grid grid-cols-3 gap-2">
+                    <%= for purpose <- @geofence_purposes do %>
+                      <label class={[
+                        "flex flex-col items-center gap-1 p-2 rounded-xl border cursor-pointer transition-all",
+                        if(to_string(purpose) == @geofence_purpose,
+                          do: "border-indigo-500 bg-indigo-50 text-indigo-700",
+                          else: "border-gray-200 bg-white text-gray-600 hover:border-gray-300"
+                        )
+                      ]}>
+                        <input
+                          type="radio"
+                          name="geofence[purpose]"
+                          value={purpose}
+                          checked={to_string(purpose) == @geofence_purpose}
+                          class="sr-only"
+                        />
+                        <.icon
+                          name={purpose_icon(purpose)}
+                          class={[
+                            "w-5 h-5",
+                            if(to_string(purpose) == @geofence_purpose,
+                              do: "text-indigo-600",
+                              else: ""
+                            )
+                          ]}
+                        />
+                        <span class="text-xs font-medium capitalize leading-tight text-center">
+                          {purpose |> to_string() |> String.replace("_", " ")}
+                        </span>
+                      </label>
+                    <% end %>
+                  </div>
                 </div>
-              </div>
+              <% end %>
 
               <%!-- Color --%>
               <div>
@@ -1659,14 +1815,16 @@ defmodule PlatserWeb.MapLive do
                 >
                   {if @editing_geofence_id, do: "Save", else: "Save draft"}
                 </button>
-                <button
-                  type="submit"
-                  name="publish"
-                  value="true"
-                  class="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 active:scale-95 transition-all"
-                >
-                  {if @editing_geofence_id, do: "Save & Publish", else: "Publish"}
-                </button>
+                <%= if not @editing_geofence_published do %>
+                  <button
+                    type="submit"
+                    name="publish"
+                    value="true"
+                    class="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 active:scale-95 transition-all"
+                  >
+                    {if @editing_geofence_id, do: "Save & Publish", else: "Publish"}
+                  </button>
+                <% end %>
               </div>
             </.form>
           </div>
@@ -1831,13 +1989,6 @@ defmodule PlatserWeb.MapLive do
                 <%= if @selected_map_object_can_manage do %>
                   <%= if MapInspection.resource_status(item) == :draft do %>
                     <button
-                      id="map-item-edit-btn"
-                      phx-click="edit_selected_map_object"
-                      class="flex-1 py-2.5 rounded-xl border border-gray-300 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 active:scale-95 transition-all"
-                    >
-                      Edit
-                    </button>
-                    <button
                       id="map-item-publish-btn"
                       phx-click="publish_selected_map_object"
                       class="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 active:scale-95 transition-all"
@@ -1845,6 +1996,13 @@ defmodule PlatserWeb.MapLive do
                       Publish
                     </button>
                   <% end %>
+                  <button
+                    id="map-item-edit-btn"
+                    phx-click="edit_selected_map_object"
+                    class="flex-1 py-2.5 rounded-xl border border-gray-300 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 active:scale-95 transition-all"
+                  >
+                    Edit
+                  </button>
                   <button
                     id="map-item-delete-btn"
                     phx-click="delete_selected_map_object"

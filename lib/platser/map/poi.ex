@@ -51,6 +51,11 @@ defmodule Platser.Map.Poi do
       end
     end
 
+    update :update_metadata do
+      accept [:name, :description]
+      require_atomic? false
+    end
+
     destroy :destroy do
       primary? true
     end
@@ -70,6 +75,11 @@ defmodule Platser.Map.Poi do
     end
 
     policy action(:update) do
+      authorize_if expr(creator_id == ^actor(:id))
+      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
+    end
+
+    policy action(:update_metadata) do
       authorize_if expr(creator_id == ^actor(:id))
       authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
     end
