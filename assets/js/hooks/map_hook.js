@@ -9,6 +9,28 @@ if (!window.__platserPmtilesProtocolRegistered) {
   window.__platserPmtilesProtocolRegistered = true
 }
 
+// Returns distance in metres between two WGS-84 coordinates (Haversine formula).
+function haversineMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLng = ((lng2 - lng1) * Math.PI) / 180
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+// Deterministic colour for a member marker based on their user ID string.
+function memberColor(userId) {
+  const palette = [
+    "#F97316", "#EAB308", "#84CC16", "#10B981",
+    "#06B6D4", "#6366F1", "#A855F7", "#EC4899",
+  ]
+  let hash = 0
+  for (let i = 0; i < userId.length; i++) hash = (hash * 31 + userId.charCodeAt(i)) >>> 0
+  return palette[hash % palette.length]
+}
+
 function buildStyle(mapUrl, flavorName, language) {
   if (!mapUrl.startsWith("pmtiles://") && !mapUrl.startsWith("https://") && !mapUrl.startsWith("http://")) {
     mapUrl = "pmtiles://" + mapUrl
@@ -95,6 +117,13 @@ export default {
     this.pickMode = false
     this.drawMode = false
     this.drawVertices = []
+
+    // Live location sharing state
+    this.memberMarkers = {}
+    this.watchId = null
+    this.lastLat = null
+    this.lastLng = null
+    this.lastPushTime = 0
 
     this.map = new maplibregl.Map({
       container: this.el,
@@ -183,6 +212,47 @@ export default {
     this.handleEvent("geofence_removed", ({id}) => {
       this.runWhenReady(() => this._removeFeature("geofences", id))
     })
+
+    // Live location sharing events
+    this.handleEvent("start_sharing", () => {
+      this._startGeolocation()
+    })
+
+    this.handleEvent("stop_sharing", () => {
+      this._stopGeolocation()
+    })
+
+    this.handleEvent("member_locations_init", ({locations}) => {
+      this.runWhenReady(() => {
+        locations.forEach(loc => this._upsertMemberMarker(loc.user_id, loc.lat, loc.lng, loc.display_name))
+      })
+    })
+
+    this.handleEvent("member_location_updated", ({user_id, lat, lng, display_name}) => {
+      this.runWhenReady(() => this._upsertMemberMarker(user_id, lat, lng, display_name))
+    })
+
+    this.handleEvent("member_location_removed", ({user_id}) => {
+      this.runWhenReady(() => this._removeMemberMarker(user_id))
+    })
+  },
+
+  reconnected() {
+    // If geolocation was active, push current location again to re-establish Presence
+    if (this.watchId !== null && this.lastLat !== null) {
+      this.pushEvent("location_update", {
+        lat: this.lastLat,
+        lng: this.lastLng,
+        accuracy: null,
+        heading: null,
+      })
+    }
+  },
+
+  destroyed() {
+    this._stopGeolocation()
+    this._clearAllMemberMarkers()
+    this.map?.remove()
   },
 
   runWhenReady(fn) {
@@ -370,7 +440,91 @@ export default {
     if (source) source.setData(data)
   },
 
+  // ---------------------------------------------------------------------------
+  // Live location sharing
+  // ---------------------------------------------------------------------------
+
+  _startGeolocation() {
+    if (!navigator.geolocation) return
+    if (this.watchId !== null) return
+
+    this.watchId = navigator.geolocation.watchPosition(
+      pos => {
+        const {latitude: lat, longitude: lng, accuracy, heading} = pos.coords
+        const now = Date.now()
+        const distMoved = this.lastLat !== null ? haversineMeters(this.lastLat, this.lastLng, lat, lng) : Infinity
+        const timeSincePush = now - this.lastPushTime
+
+        if (distMoved > 10 || timeSincePush > 10000) {
+          this.lastLat = lat
+          this.lastLng = lng
+          this.lastPushTime = now
+          this.pushEvent("location_update", {lat, lng, accuracy, heading})
+        }
+      },
+      _err => {},
+      {enableHighAccuracy: true, maximumAge: 5000, timeout: 10000},
+    )
+  },
+
+  _stopGeolocation() {
+    if (this.watchId !== null) {
+      navigator.geolocation.clearWatch(this.watchId)
+      this.watchId = null
+    }
+  },
+
+  _upsertMemberMarker(userId, lat, lng, displayName) {
+    if (this.memberMarkers[userId]) {
+      this.memberMarkers[userId].setLngLat([lng, lat])
+    } else {
+      const el = document.createElement("div")
+      el.className = "member-marker"
+      el.style.cssText = [
+        "width:36px",
+        "height:36px",
+        "border-radius:50%",
+        "background:" + memberColor(userId),
+        "border:3px solid white",
+        "box-shadow:0 2px 8px rgba(0,0,0,0.3)",
+        "display:flex",
+        "align-items:center",
+        "justify-content:center",
+        "font-size:13px",
+        "font-weight:700",
+        "color:white",
+        "cursor:default",
+        "user-select:none",
+      ].join(";")
+
+      el.textContent = (displayName || "?").charAt(0).toUpperCase()
+      el.title = displayName || userId
+
+      const marker = new maplibregl.Marker({element: el})
+        .setLngLat([lng, lat])
+        .addTo(this.map)
+
+      this.memberMarkers[userId] = marker
+    }
+  },
+
+  _removeMemberMarker(userId) {
+    if (this.memberMarkers[userId]) {
+      this.memberMarkers[userId].remove()
+      delete this.memberMarkers[userId]
+    }
+  },
+
+  _clearAllMemberMarkers() {
+    Object.keys(this.memberMarkers).forEach(userId => {
+      this.memberMarkers[userId].remove()
+    })
+    this.memberMarkers = {}
+  },
+
   destroyed() {
+    this._stopGeolocation()
+    this._clearAllMemberMarkers()
     this.map?.remove()
   },
 }

@@ -3,7 +3,9 @@ defmodule PlatserWeb.MapLive do
 
   alias Platser.Activity
   alias Platser.Activity.Entry
+  alias Platser.EventPresence
   alias Platser.Events.Event
+  alias Platser.Location
   alias Platser.Map, as: PlatserMap
   alias Platser.Map.Geofence
   alias Platser.Map.Poi
@@ -33,6 +35,10 @@ defmodule PlatserWeb.MapLive do
           | {:geofence_removed, Ecto.UUID.t()}
 
   @type activity_msg :: {:entry_added, Entry.t()}
+
+  @type location_update_params :: %{
+          String.t() => float() | nil
+        }
 
   @type poi_step :: :idle | :picking | :editing
   @type geofence_step :: :idle | :drawing | :editing
@@ -80,13 +86,17 @@ defmodule PlatserWeb.MapLive do
           if connected?(socket) do
             Phoenix.PubSub.subscribe(Platser.PubSub, "event:#{event_id}:map_objects")
             Phoenix.PubSub.subscribe(Platser.PubSub, "event:#{event_id}:activity")
+            Phoenix.PubSub.subscribe(Platser.PubSub, EventPresence.topic(event_id))
             send(self(), :push_map_init)
             socket
           else
             socket
           end
 
-        {:ok, socket}
+        {:ok,
+         socket
+         |> assign(:sharing?, false)
+         |> assign(:location_tracked?, false)}
 
       {:error, :not_found} ->
         {:ok,
@@ -98,12 +108,30 @@ defmodule PlatserWeb.MapLive do
 
   @impl Phoenix.LiveView
   def handle_info(:push_map_init, socket) do
-    payload = %{
+    event_id = socket.assigns.event.id
+
+    map_payload = %{
       pois: to_geojson_feature_collection(socket.assigns.pois, &poi_to_feature/1),
       geofences: to_geojson_feature_collection(socket.assigns.geofences, &geofence_to_feature/1)
     }
 
-    {:noreply, push_event(socket, "map_init", payload)}
+    member_locations =
+      EventPresence.list_locations(event_id)
+      |> Enum.map(fn {user_id, meta} ->
+        %{
+          user_id: user_id,
+          lat: meta.lat,
+          lng: meta.lng,
+          display_name: Map.get(meta, :display_name, "")
+        }
+      end)
+
+    socket =
+      socket
+      |> push_event("map_init", map_payload)
+      |> push_event("member_locations_init", %{locations: member_locations})
+
+    {:noreply, socket}
   end
 
   def handle_info({:poi_added, poi}, socket) do
@@ -139,6 +167,53 @@ defmodule PlatserWeb.MapLive do
      end)}
   end
 
+  def handle_info(
+        %Phoenix.Socket.Broadcast{event: "presence_diff", payload: diff},
+        socket
+      ) do
+    my_user_id = socket.assigns.current_user.id
+    event_id = socket.assigns.event.id
+    topic = EventPresence.topic(event_id)
+
+    socket =
+      Enum.reduce(diff.joins, socket, fn {user_id, %{metas: [meta | _]}}, acc ->
+        if user_id != my_user_id do
+          push_event(acc, "member_location_updated", %{
+            user_id: user_id,
+            lat: meta.lat,
+            lng: meta.lng,
+            display_name: Map.get(meta, :display_name, "")
+          })
+        else
+          acc
+        end
+      end)
+
+    socket =
+      Enum.reduce(diff.leaves, socket, fn {user_id, _}, acc ->
+        if user_id != my_user_id do
+          current = EventPresence.list(topic)
+
+          case Map.get(current, user_id) do
+            %{metas: [latest | _]} ->
+              push_event(acc, "member_location_updated", %{
+                user_id: user_id,
+                lat: latest.lat,
+                lng: latest.lng,
+                display_name: Map.get(latest, :display_name, "")
+              })
+
+            _ ->
+              push_event(acc, "member_location_removed", %{user_id: user_id})
+          end
+        else
+          acc
+        end
+      end)
+
+    {:noreply, socket}
+  end
+
   @impl Phoenix.LiveView
   def handle_event("toggle_drawer", _params, socket) do
     drawer_open = !socket.assigns.drawer_open
@@ -147,6 +222,54 @@ defmodule PlatserWeb.MapLive do
      socket
      |> assign(:drawer_open, drawer_open)
      |> assign(:unread_count, if(drawer_open, do: 0, else: socket.assigns.unread_count))}
+  end
+
+  def handle_event("toggle_sharing", _params, socket) do
+    if socket.assigns.sharing? do
+      event_id = socket.assigns.event.id
+      topic = EventPresence.topic(event_id)
+      EventPresence.untrack(self(), topic, socket.assigns.current_user.id)
+
+      {:noreply,
+       socket
+       |> assign(:sharing?, false)
+       |> assign(:location_tracked?, false)
+       |> push_event("stop_sharing", %{})}
+    else
+      {:noreply,
+       socket
+       |> assign(:sharing?, true)
+       |> push_event("start_sharing", %{})}
+    end
+  end
+
+  def handle_event(
+        "location_update",
+        %{"lat" => lat, "lng" => lng} = params,
+        socket
+      ) do
+    if socket.assigns.sharing? do
+      event_id = socket.assigns.event.id
+      user = socket.assigns.current_user
+      already_tracked? = socket.assigns.location_tracked?
+
+      location_params = %{
+        lat: ensure_float(lat),
+        lng: ensure_float(lng),
+        accuracy: maybe_float(params["accuracy"]),
+        heading: maybe_float(params["heading"])
+      }
+
+      case Location.update_presence(self(), event_id, user, location_params, already_tracked?) do
+        {:ok, _meta} ->
+          {:noreply, assign(socket, :location_tracked?, true)}
+
+        {:error, :invalid_coords} ->
+          {:noreply, socket}
+      end
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_event("open_poi_form", _params, socket) do
@@ -617,6 +740,26 @@ defmodule PlatserWeb.MapLive do
         "fixed bottom-24 right-4 z-20 flex flex-col gap-3 transition-all duration-300",
         (@poi_step != :idle or @geofence_step != :idle) && "opacity-0 pointer-events-none"
       ]}>
+        <%!-- Share location toggle --%>
+        <button
+          id="share-location-btn"
+          phx-click="toggle_sharing"
+          class={[
+            "w-12 h-12 rounded-full shadow-lg border flex items-center justify-center active:scale-95 transition-all",
+            if(@sharing?,
+              do:
+                "bg-emerald-500 border-emerald-400 hover:bg-emerald-600 ring-4 ring-emerald-200 animate-pulse",
+              else:
+                "bg-white/90 backdrop-blur-sm border-gray-200 hover:bg-emerald-50 hover:border-emerald-300"
+            )
+          ]}
+          title={if @sharing?, do: "Stop sharing location", else: "Share my location"}
+        >
+          <.icon
+            name="hero-map-pin"
+            class={["w-5 h-5", if(@sharing?, do: "text-white", else: "text-emerald-500")]}
+          />
+        </button>
         <button
           id="add-geofence-btn"
           phx-click="open_geofence_form"
@@ -1212,4 +1355,12 @@ defmodule PlatserWeb.MapLive do
   defp purpose_icon(:restricted), do: "hero-no-symbol"
   defp purpose_icon(:camp_area), do: "hero-home"
   defp purpose_icon(:other), do: "hero-tag"
+
+  @spec ensure_float(number()) :: float()
+  defp ensure_float(n) when is_float(n), do: n
+  defp ensure_float(n) when is_integer(n), do: n * 1.0
+
+  @spec maybe_float(number() | nil) :: float() | nil
+  defp maybe_float(nil), do: nil
+  defp maybe_float(n), do: ensure_float(n)
 end

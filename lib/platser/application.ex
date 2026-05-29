@@ -12,6 +12,7 @@ defmodule Platser.Application do
       Platser.Repo,
       {DNSCluster, query: Application.get_env(:platser, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Platser.PubSub},
+      Platser.EventPresence,
       # Start a worker by calling: Platser.Worker.start_link(arg)
       # {Platser.Worker, arg},
       # Start to serve requests, typically the last entry
