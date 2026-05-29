@@ -665,10 +665,11 @@ defmodule PlatserWeb.MapLive do
         socket =
           if publish? do
             case PlatserMap.publish_poi(poi, actor: actor) do
-              {:ok, _published} ->
+              {:ok, published} ->
                 socket
                 |> reset_poi_form()
-                |> push_event("poi_added", poi_to_feature(poi))
+                |> select_map_object(:poi, published)
+                |> push_event("poi_added", poi_to_feature(published))
                 |> put_flash(:info, "POI published! Everyone can see it.")
 
               {:error, %Ash.Error.Invalid{} = err} ->
@@ -681,6 +682,7 @@ defmodule PlatserWeb.MapLive do
           else
             socket
             |> reset_poi_form()
+            |> select_map_object(:poi, poi)
             |> push_event("poi_added", poi_to_feature(poi))
             |> put_flash(:info, "POI saved as draft. Only you can see it.")
           end
@@ -876,6 +878,19 @@ defmodule PlatserWeb.MapLive do
     }
   end
 
+  @spec select_map_object(
+          Phoenix.LiveView.Socket.t(),
+          MapInspection.kind(),
+          Poi.t() | Geofence.t()
+        ) :: Phoenix.LiveView.Socket.t()
+  defp select_map_object(socket, kind, item) do
+    actor = socket.assigns.current_user
+
+    socket
+    |> assign(:selected_map_object, %{kind: kind, item: item})
+    |> assign(:selected_map_object_can_manage, can_manage_selected_map_object?(item, actor))
+  end
+
   @spec can_manage_selected_map_object?(Poi.t() | Geofence.t(), Platser.Accounts.User.t() | nil) ::
           boolean()
   defp can_manage_selected_map_object?(_item, nil), do: false
@@ -956,10 +971,11 @@ defmodule PlatserWeb.MapLive do
         socket =
           if publish? do
             case PlatserMap.publish_geofence(geofence, actor: actor) do
-              {:ok, _published} ->
+              {:ok, published} ->
                 socket
                 |> reset_geofence_form()
-                |> push_event("geofence_added", geofence_to_feature(geofence))
+                |> select_map_object(:geofence, published)
+                |> push_event("geofence_added", geofence_to_feature(published))
                 |> put_flash(:info, "Geofence published! Everyone can see it.")
 
               {:error, %Ash.Error.Invalid{} = err} ->
@@ -974,6 +990,7 @@ defmodule PlatserWeb.MapLive do
           else
             socket
             |> reset_geofence_form()
+            |> select_map_object(:geofence, geofence)
             |> push_event("geofence_added", geofence_to_feature(geofence))
             |> put_flash(:info, "Geofence saved as draft. Only you can see it.")
           end

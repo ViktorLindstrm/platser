@@ -38,3 +38,16 @@ that queries rendered features on the three interactive layers (`poi-circles`, `
 - The hover tooltip relies on the `name` property always being present in GeoJSON feature payloads;
   this invariant is enforced by `allow_nil? false` on the name attribute of both `Poi` and `Geofence` resources.
 
+## Post-creation auto-inspect
+
+After a successful POI or geofence creation (both draft and publish paths), the inspection drawer
+opens automatically for the newly created item. This is implemented by calling `select_map_object/3`
+in `do_create_poi` and `do_create_geofence` immediately after `reset_poi_form`/`reset_geofence_form`.
+This means:
+
+- The creation form bottom sheet closes (step reset to `:idle`).
+- The inspection drawer opens showing the new item's status, visibility, and available actions.
+- The user can immediately publish, edit, or delete the item without tapping it on the map.
+- For the publish path, `selected_map_object` is populated with the *published* version of the item
+  (the post-publish result), ensuring the correct status badge and hidden publish button are shown.
+

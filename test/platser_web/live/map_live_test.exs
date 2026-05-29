@@ -250,4 +250,79 @@ defmodule PlatserWeb.MapLiveTest do
     refute has_element?(view, "#map-item-publish-btn")
     assert has_element?(view, "#map-item-delete-btn")
   end
+
+  test "saving a new POI as draft opens inspection drawer for that POI", %{conn: conn} do
+    user = create_user("auto_inspect_poi_draft")
+    event = create_event(user)
+    conn = sign_in_conn(conn, user)
+
+    {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+    render_hook(view, "poi_location_picked", %{"lat" => -36.8485, "lng" => 174.7633})
+
+    render_submit(element(view, "#poi-form"), %{
+      "poi" => %{
+        "name" => "My New Draft POI",
+        "description" => "Created via form",
+        "category" => "viewpoint"
+      },
+      "publish" => "false"
+    })
+
+    assert has_element?(view, "#map-item-drawer")
+    assert has_element?(view, "#map-item-publish-btn")
+  end
+
+  test "saving a new POI as published opens inspection drawer for that POI", %{conn: conn} do
+    user = create_user("auto_inspect_poi_pub")
+    event = create_event(user)
+    conn = sign_in_conn(conn, user)
+
+    {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+    render_hook(view, "poi_location_picked", %{"lat" => -36.8485, "lng" => 174.7633})
+
+    render_submit(element(view, "#poi-form"), %{
+      "poi" => %{
+        "name" => "My Published POI",
+        "description" => "Published via form",
+        "category" => "viewpoint"
+      },
+      "publish" => "true"
+    })
+
+    assert has_element?(view, "#map-item-drawer")
+    refute has_element?(view, "#map-item-publish-btn")
+  end
+
+  test "saving a new geofence as draft opens inspection drawer for that geofence", %{conn: conn} do
+    user = create_user("auto_inspect_fence_draft")
+    event = create_event(user)
+    conn = sign_in_conn(conn, user)
+
+    {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+    render_click(element(view, "#add-geofence-btn"))
+
+    render_hook(view, "vertex_added", %{
+      "vertices" => [
+        [174.76, -36.85],
+        [174.77, -36.85],
+        [174.77, -36.84]
+      ]
+    })
+
+    render_hook(view, "finish_drawing", %{})
+
+    render_submit(element(view, "#geofence-form"), %{
+      "geofence" => %{
+        "name" => "My Draft Geofence",
+        "purpose" => "boundary",
+        "color" => "#3B82F6"
+      },
+      "publish" => "false"
+    })
+
+    assert has_element?(view, "#map-item-drawer")
+  end
 end
