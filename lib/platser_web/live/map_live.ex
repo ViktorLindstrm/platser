@@ -50,7 +50,7 @@ defmodule PlatserWeb.MapLive do
           |> assign(:event, event)
           |> assign(:pois, pois)
           |> assign(:geofences, geofences)
-          |> assign(:entries, entries)
+          |> stream(:entries, entries)
           |> assign(:unread_count, 0)
           |> assign(:drawer_open, false)
           |> assign(:pmtiles_url, @pmtiles_url)
@@ -133,7 +133,7 @@ defmodule PlatserWeb.MapLive do
   def handle_info({:entry_added, entry}, socket) do
     {:noreply,
      socket
-     |> update(:entries, fn entries -> [entry | Enum.take(entries, 49)] end)
+     |> stream_insert(:entries, entry, at: 0)
      |> update(:unread_count, fn count ->
        if socket.assigns.drawer_open, do: count, else: count + 1
      end)}
@@ -525,12 +525,27 @@ defmodule PlatserWeb.MapLive do
               {@event.name}
             </h1>
           </div>
-          <.link
-            navigate={~p"/join/#{@event.join_code}"}
-            class="bg-white/90 backdrop-blur-sm rounded-xl px-3 py-2 shadow-lg border border-gray-200 pointer-events-auto"
-          >
-            <.icon name="hero-users" class="w-4 h-4 text-gray-500" />
-          </.link>
+          <div class="flex items-center gap-2 pointer-events-auto">
+            <%!-- Activity feed toggle (desktop only) --%>
+            <button
+              id="feed-toggle-desktop"
+              phx-click="toggle_drawer"
+              class="hidden md:flex items-center gap-1.5 relative bg-white/90 backdrop-blur-sm rounded-xl px-3 py-2 shadow-lg border border-gray-200 hover:bg-white transition-colors"
+            >
+              <.icon name="hero-bell" class="w-4 h-4 text-gray-500" />
+              <%= if @unread_count > 0 do %>
+                <span class="absolute -top-1.5 -right-1.5 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-blue-600 rounded-full ring-2 ring-white">
+                  {if @unread_count > 9, do: "9+", else: @unread_count}
+                </span>
+              <% end %>
+            </button>
+            <.link
+              navigate={~p"/join/#{@event.join_code}"}
+              class="bg-white/90 backdrop-blur-sm rounded-xl px-3 py-2 shadow-lg border border-gray-200"
+            >
+              <.icon name="hero-users" class="w-4 h-4 text-gray-500" />
+            </.link>
+          </div>
         </div>
       </div>
 
@@ -1008,21 +1023,26 @@ defmodule PlatserWeb.MapLive do
         </div>
       </div>
 
-      <%!-- Activity feed drawer --%>
+      <%!-- Activity feed — mobile: slide-up drawer, desktop: right side panel --%>
       <div
         id="activity-drawer"
         class={[
-          "fixed bottom-0 left-0 right-0 z-20 transform transition-transform duration-300 ease-in-out",
+          "fixed z-20 transform transition-all duration-300 ease-in-out",
+          "bottom-0 left-0 right-0",
+          "md:top-0 md:bottom-0 md:left-auto md:right-0 md:w-80",
           (@poi_step != :idle or @geofence_step != :idle) && "opacity-0 pointer-events-none",
-          if(not @drawer_open, do: "translate-y-[calc(100%-3.5rem)]")
+          if(@drawer_open,
+            do: "translate-y-0 md:translate-x-0",
+            else: "translate-y-[calc(100%-3.5rem)] md:translate-y-0 md:translate-x-full"
+          )
         ]}
       >
-        <div class="bg-white rounded-t-2xl border-t border-gray-200 shadow-2xl">
-          <%!-- Drawer handle / toggle button --%>
+        <div class="bg-white rounded-t-2xl border-t border-gray-200 shadow-2xl flex flex-col md:rounded-none md:rounded-l-2xl md:border-l md:border-y md:border-r-0 md:h-full">
+          <%!-- Mobile: drawer handle / toggle button --%>
           <button
             id="drawer-toggle"
             phx-click="toggle_drawer"
-            class="w-full py-3 flex flex-col items-center gap-1 focus:outline-none"
+            class="w-full py-3 flex flex-col items-center gap-1 focus:outline-none md:hidden"
           >
             <div class="w-10 h-1 bg-gray-200 rounded-full" />
             <div class="flex items-center gap-2">
@@ -1036,26 +1056,50 @@ defmodule PlatserWeb.MapLive do
             </div>
           </button>
 
+          <%!-- Desktop: panel header --%>
+          <div class="hidden md:flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
+            <div class="flex items-center gap-2">
+              <.icon name="hero-bell" class="w-4 h-4 text-gray-500" />
+              <span class="text-sm font-semibold text-gray-800">Activity</span>
+              <%= if @unread_count > 0 do %>
+                <span class="inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-blue-600 rounded-full">
+                  {if @unread_count > 9, do: "9+", else: @unread_count}
+                </span>
+              <% end %>
+            </div>
+            <button
+              id="feed-close-desktop"
+              phx-click="toggle_drawer"
+              class="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+            >
+              <.icon name="hero-x-mark" class="w-4 h-4" />
+            </button>
+          </div>
+
           <%!-- Feed entries --%>
-          <div id="activity-entries" class="px-4 pb-6 max-h-72 overflow-y-auto space-y-2">
-            <%= if Enum.empty?(@entries) do %>
-              <p class="text-center text-sm text-gray-400 py-4">
-                No activity yet. Start exploring!
-              </p>
-            <% end %>
-            <%= for entry <- @entries do %>
-              <div class="flex items-start gap-3 py-2 border-b border-gray-100 last:border-0">
-                <div class="w-8 h-8 bg-blue-50 rounded-full flex items-center justify-center shrink-0 mt-0.5">
-                  <.icon name={entry_icon(entry.action)} class="w-4 h-4 text-blue-600" />
-                </div>
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm text-gray-800 leading-snug">{entry.message}</p>
-                  <p class="text-xs text-gray-400 mt-0.5">
-                    {Calendar.strftime(entry.inserted_at, "%H:%M")}
-                  </p>
-                </div>
+          <div
+            id="activity-entries"
+            phx-update="stream"
+            class="px-4 pb-6 pt-2 max-h-72 md:max-h-none md:flex-1 overflow-y-auto"
+          >
+            <div class="hidden only:block text-center text-sm text-gray-400 py-8">
+              No activity yet. Start exploring!
+            </div>
+            <div
+              :for={{id, entry} <- @streams.entries}
+              id={id}
+              class="activity-entry flex items-start gap-3 py-2.5 border-b border-gray-100 last:border-0"
+            >
+              <div class="w-8 h-8 bg-blue-50 rounded-full flex items-center justify-center shrink-0 mt-0.5">
+                <.icon name={entry_icon(entry.action)} class="w-4 h-4 text-blue-600" />
               </div>
-            <% end %>
+              <div class="flex-1 min-w-0">
+                <p class="text-sm text-gray-800 leading-snug">{entry.message}</p>
+                <p class="text-xs text-gray-400 mt-0.5">
+                  {Calendar.strftime(entry.inserted_at, "%H:%M")}
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
