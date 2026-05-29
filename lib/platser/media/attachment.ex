@@ -20,6 +20,7 @@ defmodule Platser.Media.Attachment do
     read :list_by_poi do
       argument :poi_id, :uuid, allow_nil?: false
       filter expr(poi_id == ^arg(:poi_id))
+      prepare build(sort: [inserted_at: :asc])
     end
 
     create :create do

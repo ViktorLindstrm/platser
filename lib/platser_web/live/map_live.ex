@@ -9,6 +9,8 @@ defmodule PlatserWeb.MapLive do
   alias Platser.Map, as: PlatserMap
   alias Platser.Map.Geofence
   alias Platser.Map.Poi
+  alias Platser.Media
+  alias Platser.Media.Attachment
   alias PlatserWeb.MapInspection
 
   @pmtiles_url Application.compile_env(
@@ -43,7 +45,11 @@ defmodule PlatserWeb.MapLive do
 
   @type poi_step :: :idle | :picking | :editing
   @type geofence_step :: :idle | :drawing | :editing
-  @type selected_map_object :: %{kind: MapInspection.kind(), item: Poi.t() | Geofence.t()}
+  @type selected_map_object :: %{
+          kind: MapInspection.kind(),
+          item: Poi.t() | Geofence.t(),
+          attachments: [Attachment.t()]
+        }
   @type editing_id :: Ecto.UUID.t() | nil
 
   @impl Phoenix.LiveView
@@ -479,11 +485,7 @@ defmodule PlatserWeb.MapLive do
           {:ok, published} ->
             {:noreply,
              socket
-             |> assign(:selected_map_object, %{kind: :poi, item: published})
-             |> assign(
-               :selected_map_object_can_manage,
-               can_manage_selected_map_object?(published, socket.assigns.current_user)
-             )
+             |> select_map_object(:poi, published)
              |> push_event("poi_updated", poi_to_feature(published))
              |> put_flash(:info, "POI published!")}
 
@@ -500,11 +502,7 @@ defmodule PlatserWeb.MapLive do
           {:ok, published} ->
             {:noreply,
              socket
-             |> assign(:selected_map_object, %{kind: :geofence, item: published})
-             |> assign(
-               :selected_map_object_can_manage,
-               can_manage_selected_map_object?(published, socket.assigns.current_user)
-             )
+             |> select_map_object(:geofence, published)
              |> push_event("geofence_updated", geofence_to_feature(published))
              |> put_flash(:info, "Geofence published!")}
 
@@ -849,19 +847,41 @@ defmodule PlatserWeb.MapLive do
           {:ok, selected_map_object()} | {:error, :not_found}
   defp load_selected_map_object("poi", id, actor) do
     case PlatserMap.get_poi(id, actor: actor) do
-      {:ok, %Poi{} = poi} -> {:ok, %{kind: :poi, item: poi}}
-      _ -> {:error, :not_found}
+      {:ok, %Poi{} = poi} ->
+        {:ok, %{kind: :poi, item: poi, attachments: load_poi_attachments(poi.id, actor)}}
+
+      _ ->
+        {:error, :not_found}
     end
   end
 
   defp load_selected_map_object("geofence", id, actor) do
     case PlatserMap.get_geofence(id, actor: actor) do
-      {:ok, %Geofence{} = geofence} -> {:ok, %{kind: :geofence, item: geofence}}
-      _ -> {:error, :not_found}
+      {:ok, %Geofence{} = geofence} ->
+        {:ok, %{kind: :geofence, item: geofence, attachments: []}}
+
+      _ ->
+        {:error, :not_found}
     end
   end
 
   defp load_selected_map_object(_, _, _), do: {:error, :not_found}
+
+  @spec load_poi_attachments(Ecto.UUID.t(), Platser.Accounts.User.t()) :: [Attachment.t()]
+  defp load_poi_attachments(poi_id, actor) do
+    case Media.list_attachments_for_poi(poi_id, actor: actor) do
+      {:ok, attachments} ->
+        attachments
+
+      {:error, %Ash.Error.Forbidden{}} ->
+        []
+
+      {:error, reason} ->
+        require Logger
+        Logger.warning("Failed to load attachments for POI #{poi_id}: #{inspect(reason)}")
+        []
+    end
+  end
 
   @spec focus_map_object_payload(selected_map_object()) :: map()
   defp focus_map_object_payload(%{kind: :poi, item: %Poi{} = poi}) do
@@ -880,15 +900,29 @@ defmodule PlatserWeb.MapLive do
 
   @spec select_map_object(
           Phoenix.LiveView.Socket.t(),
-          MapInspection.kind(),
-          Poi.t() | Geofence.t()
+          :poi,
+          Poi.t()
         ) :: Phoenix.LiveView.Socket.t()
-  defp select_map_object(socket, kind, item) do
+  defp select_map_object(socket, :poi, %Poi{} = poi) do
+    actor = socket.assigns.current_user
+    attachments = load_poi_attachments(poi.id, actor)
+
+    socket
+    |> assign(:selected_map_object, %{kind: :poi, item: poi, attachments: attachments})
+    |> assign(:selected_map_object_can_manage, can_manage_selected_map_object?(poi, actor))
+  end
+
+  @spec select_map_object(
+          Phoenix.LiveView.Socket.t(),
+          :geofence,
+          Geofence.t()
+        ) :: Phoenix.LiveView.Socket.t()
+  defp select_map_object(socket, :geofence, %Geofence{} = geofence) do
     actor = socket.assigns.current_user
 
     socket
-    |> assign(:selected_map_object, %{kind: kind, item: item})
-    |> assign(:selected_map_object_can_manage, can_manage_selected_map_object?(item, actor))
+    |> assign(:selected_map_object, %{kind: :geofence, item: geofence, attachments: []})
+    |> assign(:selected_map_object_can_manage, can_manage_selected_map_object?(geofence, actor))
   end
 
   @spec can_manage_selected_map_object?(Poi.t() | Geofence.t(), Platser.Accounts.User.t() | nil) ::
@@ -1703,6 +1737,32 @@ defmodule PlatserWeb.MapLive do
               <%= if kind == :poi and item.description && item.description != "" do %>
                 <div>
                   <p class="text-sm text-gray-600 leading-relaxed">{item.description}</p>
+                </div>
+              <% end %>
+
+              <%!-- Photo gallery strip (POI only) --%>
+              <%= if kind == :poi and @selected_map_object.attachments != [] do %>
+                <div id="poi-photo-strip">
+                  <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+                    Photos
+                  </p>
+                  <div class="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+                    <%= for attachment <- @selected_map_object.attachments do %>
+                      <a
+                        id={"photo-#{attachment.id}"}
+                        href={attachment.path}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="shrink-0 group"
+                      >
+                        <img
+                          src={attachment.path}
+                          alt={attachment.filename}
+                          class="h-24 w-24 object-cover rounded-xl border border-gray-200 group-hover:opacity-90 group-hover:scale-[1.02] transition-all"
+                        />
+                      </a>
+                    <% end %>
+                  </div>
                 </div>
               <% end %>
 

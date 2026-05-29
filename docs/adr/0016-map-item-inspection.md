@@ -51,3 +51,20 @@ This means:
 - For the publish path, `selected_map_object` is populated with the *published* version of the item
   (the post-publish result), ensuring the correct status badge and hidden publish button are shown.
 
+## Photo gallery in inspection drawer
+
+The `selected_map_object` assign includes an `attachments` field: a list of `Media.Attachment`
+records for POIs, and an empty list for geofences.
+
+- `load_selected_map_object/3` calls `load_poi_attachments/2` when selecting a POI.
+- `select_map_object/3` does the same for the post-creation auto-inspect path.
+- `publish_selected_map_object` now uses `select_map_object/3` so attachments are reloaded
+  after publishing (keeping the gallery visible after status transitions).
+- A horizontally-scrolling photo strip is rendered inside the drawer when
+  `@selected_map_object.attachments != []` and `kind == :poi`.
+- Photos link to their stored path and open in a new tab. File access is not gated
+  by an authenticated route — the `/uploads/...` paths are served by `Plug.Static`.
+  This is an acceptable trade-off for local dev (per ADR-0009); paths include a UUID
+  prefix making them opaque to guessing. Production deployments should replace
+  `Plug.Static` serving with signed CDN URLs.
+- Attachments in `list_by_poi` are sorted by `inserted_at asc` for deterministic order.

@@ -4,6 +4,7 @@ defmodule PlatserWeb.MapLiveTest do
   import Phoenix.LiveViewTest
 
   alias Platser.Map, as: PlatserMap
+  alias Platser.Media
 
   defp create_user(tag) do
     n = System.unique_integer([:positive])
@@ -101,6 +102,23 @@ defmodule PlatserWeb.MapLiveTest do
       )
 
     geofence
+  end
+
+  defp create_attachment(user, poi) do
+    {:ok, attachment} =
+      Media.create_attachment(
+        %{
+          filename: "photo.jpg",
+          stored_filename: "uuid_photo.jpg",
+          content_type: "image/jpeg",
+          path: "/uploads/#{poi.id}/uuid_photo.jpg",
+          poi_id: poi.id
+        },
+        actor: user,
+        authorize?: false
+      )
+
+    attachment
   end
 
   test "opens a POI inspection drawer and supports publish", %{conn: conn} do
@@ -324,5 +342,54 @@ defmodule PlatserWeb.MapLiveTest do
     })
 
     assert has_element?(view, "#map-item-drawer")
+  end
+
+  test "photo strip is shown in inspection drawer when POI has attachments", %{conn: conn} do
+    user = create_user("photo_strip_with")
+    event = create_event(user)
+    poi = create_poi(user, event)
+    attachment = create_attachment(user, poi)
+    conn = sign_in_conn(conn, user)
+
+    {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+    render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
+
+    assert has_element?(view, "#poi-photo-strip")
+    assert has_element?(view, "#photo-#{attachment.id}")
+  end
+
+  test "photo strip is not shown in inspection drawer when POI has no attachments", %{conn: conn} do
+    user = create_user("photo_strip_empty")
+    event = create_event(user)
+    poi = create_poi(user, event)
+    conn = sign_in_conn(conn, user)
+
+    {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+    render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
+
+    assert has_element?(view, "#map-item-drawer")
+    refute has_element?(view, "#poi-photo-strip")
+  end
+
+  test "photo strip survives publish action on inspection drawer", %{conn: conn} do
+    user = create_user("photo_strip_publish")
+    event = create_event(user)
+    poi = create_poi(user, event)
+    attachment = create_attachment(user, poi)
+    conn = sign_in_conn(conn, user)
+
+    {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+    render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
+
+    assert has_element?(view, "#poi-photo-strip")
+
+    render_click(element(view, "#map-item-publish-btn"))
+
+    assert has_element?(view, "#map-item-drawer")
+    assert has_element?(view, "#poi-photo-strip")
+    assert has_element?(view, "#photo-#{attachment.id}")
   end
 end
