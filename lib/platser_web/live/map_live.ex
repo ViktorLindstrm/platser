@@ -15,6 +15,14 @@ defmodule PlatserWeb.MapLive do
                )
 
   @poi_categories [:viewpoint, :camp, :hazard, :meeting_point, :food, :other]
+  @geofence_purposes [:boundary, :meeting_zone, :restricted, :camp_area, :other]
+  @purpose_colors %{
+    "boundary" => "#3B82F6",
+    "meeting_zone" => "#10B981",
+    "restricted" => "#EF4444",
+    "camp_area" => "#F59E0B",
+    "other" => "#6366F1"
+  }
 
   @type map_object_msg ::
           {:poi_added, Poi.t()}
@@ -27,6 +35,7 @@ defmodule PlatserWeb.MapLive do
   @type activity_msg :: {:entry_added, Entry.t()}
 
   @type poi_step :: :idle | :picking | :editing
+  @type geofence_step :: :idle | :drawing | :editing
 
   @impl Phoenix.LiveView
   def mount(%{"event_id" => event_id}, _session, socket) do
@@ -52,6 +61,15 @@ defmodule PlatserWeb.MapLive do
           |> assign(:poi_category, "viewpoint")
           |> assign(:poi_errors, [])
           |> assign(:poi_categories, @poi_categories)
+          |> assign(:geofence_step, :idle)
+          |> assign(:geofence_vertices, [])
+          |> assign(:geofence_geometry, nil)
+          |> assign(:geofence_name, "")
+          |> assign(:geofence_purpose, "boundary")
+          |> assign(:geofence_color, Map.fetch!(@purpose_colors, "boundary"))
+          |> assign(:geofence_errors, [])
+          |> assign(:geofence_purposes, @geofence_purposes)
+          |> assign(:purpose_colors, @purpose_colors)
           |> allow_upload(:photos,
             accept: ~w(.jpg .jpeg .png .webp),
             max_entries: 5,
@@ -182,6 +200,77 @@ defmodule PlatserWeb.MapLive do
   def handle_event("save_poi", %{"poi" => params} = event_params, socket) do
     publish? = Map.get(event_params, "publish") == "true"
     submit_poi(params, publish?, socket)
+  end
+
+  def handle_event("open_geofence_form", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:geofence_step, :drawing)
+     |> assign(:geofence_vertices, [])
+     |> assign(:geofence_geometry, nil)
+     |> assign(:geofence_name, "")
+     |> assign(:geofence_purpose, "boundary")
+     |> assign(:geofence_color, Map.fetch!(@purpose_colors, "boundary"))
+     |> assign(:geofence_errors, [])
+     |> push_event("enable_draw_mode", %{})}
+  end
+
+  def handle_event("cancel_geofence_form", _params, socket) do
+    {:noreply, reset_geofence_form(socket)}
+  end
+
+  def handle_event("vertex_added", %{"vertices" => vertices}, socket) do
+    {:noreply, assign(socket, :geofence_vertices, vertices)}
+  end
+
+  def handle_event("undo_last_vertex", _params, socket) do
+    {:noreply, push_event(socket, "undo_last_vertex", %{})}
+  end
+
+  def handle_event("finish_drawing", _params, socket) do
+    vertices = socket.assigns.geofence_vertices
+
+    if length(vertices) < 3 do
+      {:noreply, socket}
+    else
+      ring = Enum.map(vertices, fn [lng, lat] -> {lng, lat} end)
+      ring_closed = ring ++ [List.first(ring)]
+      geometry = %Geo.Polygon{coordinates: [ring_closed], srid: 4326}
+
+      {:noreply,
+       socket
+       |> assign(:geofence_step, :editing)
+       |> assign(:geofence_geometry, geometry)
+       |> push_event("disable_draw_mode", %{})}
+    end
+  end
+
+  def handle_event("validate_geofence", %{"geofence" => params}, socket) do
+    purpose = params["purpose"] || socket.assigns.geofence_purpose
+    prev_purpose = socket.assigns.geofence_purpose
+
+    color =
+      cond do
+        purpose != prev_purpose ->
+          Map.get(@purpose_colors, purpose, socket.assigns.geofence_color)
+
+        Map.has_key?(params, "color") ->
+          params["color"]
+
+        true ->
+          socket.assigns.geofence_color
+      end
+
+    {:noreply,
+     socket
+     |> assign(:geofence_name, params["name"] || "")
+     |> assign(:geofence_purpose, purpose)
+     |> assign(:geofence_color, color)}
+  end
+
+  def handle_event("save_geofence", %{"geofence" => params} = event_params, socket) do
+    publish? = Map.get(event_params, "publish") == "true"
+    submit_geofence(params, publish?, socket)
   end
 
   @spec submit_poi(map(), boolean(), Phoenix.LiveView.Socket.t()) ::
@@ -326,6 +415,90 @@ defmodule PlatserWeb.MapLive do
     |> push_event("disable_location_pick", %{})
   end
 
+  @spec reset_geofence_form(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp reset_geofence_form(socket) do
+    socket
+    |> assign(:geofence_step, :idle)
+    |> assign(:geofence_vertices, [])
+    |> assign(:geofence_geometry, nil)
+    |> assign(:geofence_name, "")
+    |> assign(:geofence_purpose, "boundary")
+    |> assign(:geofence_color, Map.fetch!(@purpose_colors, "boundary"))
+    |> assign(:geofence_errors, [])
+    |> push_event("disable_draw_mode", %{})
+  end
+
+  @spec submit_geofence(map(), boolean(), Phoenix.LiveView.Socket.t()) ::
+          {:noreply, Phoenix.LiveView.Socket.t()}
+  defp submit_geofence(params, publish?, socket) do
+    actor = socket.assigns.current_user
+    event = socket.assigns.event
+    geometry = socket.assigns.geofence_geometry
+
+    errors = validate_geofence_params(params, geometry)
+
+    if errors != [] do
+      {:noreply, assign(socket, :geofence_errors, errors)}
+    else
+      geofence_params = %{
+        name: String.trim(params["name"]),
+        purpose: String.to_existing_atom(params["purpose"]),
+        color: params["color"],
+        geometry: geometry,
+        event_id: event.id
+      }
+
+      case PlatserMap.create_geofence(geofence_params, actor: actor) do
+        {:ok, geofence} ->
+          socket =
+            if publish? do
+              case PlatserMap.publish_geofence(geofence, actor: actor) do
+                {:ok, _published} ->
+                  socket
+                  |> reset_geofence_form()
+                  |> push_event("geofence_added", geofence_to_feature(geofence))
+                  |> put_flash(:info, "Geofence published! Everyone can see it.")
+
+                {:error, %Ash.Error.Invalid{} = err} ->
+                  msg = Ash.Error.to_error_class(err).message || "Could not publish geofence"
+                  socket |> reset_geofence_form() |> put_flash(:error, msg)
+
+                {:error, _} ->
+                  socket
+                  |> reset_geofence_form()
+                  |> put_flash(:error, "Could not publish geofence")
+              end
+            else
+              socket
+              |> reset_geofence_form()
+              |> push_event("geofence_added", geofence_to_feature(geofence))
+              |> put_flash(:info, "Geofence saved as draft. Only you can see it.")
+            end
+
+          {:noreply, socket}
+
+        {:error, %Ash.Error.Invalid{} = err} ->
+          errors = format_ash_errors(err)
+          {:noreply, assign(socket, :geofence_errors, errors)}
+
+        {:error, _} ->
+          {:noreply, assign(socket, :geofence_errors, [{"base", "Could not save geofence"}])}
+      end
+    end
+  end
+
+  @spec validate_geofence_params(map(), Geo.Polygon.t() | nil) :: [{String.t(), String.t()}]
+  defp validate_geofence_params(params, geometry) do
+    []
+    |> then(fn errs ->
+      name = String.trim(params["name"] || "")
+      if name == "", do: [{"name", "can't be blank"} | errs], else: errs
+    end)
+    |> then(fn errs ->
+      if is_nil(geometry), do: [{"geometry", "draw a polygon on the map"} | errs], else: errs
+    end)
+  end
+
   @impl Phoenix.LiveView
   def render(assigns) do
     ~H"""
@@ -377,18 +550,65 @@ defmodule PlatserWeb.MapLive do
         </div>
       <% end %>
 
+      <%!-- Geofence draw mode overlay --%>
+      <%= if @geofence_step == :drawing do %>
+        <div class="fixed top-16 left-0 right-0 z-30 flex justify-center pointer-events-none">
+          <div class="bg-gray-900/90 backdrop-blur-sm text-white text-sm px-4 py-2.5 rounded-full shadow-xl flex items-center gap-3 pointer-events-auto">
+            <.icon name="hero-pencil-square" class="w-4 h-4 text-indigo-400 animate-pulse" />
+            <span class="font-medium">
+              <%= cond do %>
+                <% length(@geofence_vertices) == 0 -> %>
+                  Tap map to start drawing
+                <% length(@geofence_vertices) < 3 -> %>
+                  {length(@geofence_vertices)} vertices — need {3 - length(@geofence_vertices)} more
+                <% true -> %>
+                  {length(@geofence_vertices)} vertices
+              <% end %>
+            </span>
+            <%= if length(@geofence_vertices) > 0 do %>
+              <button
+                phx-click="undo_last_vertex"
+                class="text-gray-400 hover:text-white transition-colors"
+                title="Undo last vertex"
+              >
+                <.icon name="hero-arrow-uturn-left" class="w-4 h-4" />
+              </button>
+            <% end %>
+            <button
+              phx-click="finish_drawing"
+              disabled={length(@geofence_vertices) < 3}
+              class={[
+                "px-3 py-1 rounded-full text-xs font-semibold transition-all",
+                if(length(@geofence_vertices) >= 3,
+                  do: "bg-indigo-500 hover:bg-indigo-400 text-white",
+                  else: "bg-gray-700 text-gray-500 cursor-not-allowed"
+                )
+              ]}
+            >
+              Finish
+            </button>
+            <button
+              phx-click="cancel_geofence_form"
+              class="text-gray-400 hover:text-white transition-colors"
+            >
+              <.icon name="hero-x-mark" class="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      <% end %>
+
       <%!-- Floating action buttons (bottom-right) --%>
       <div class={[
         "fixed bottom-24 right-4 z-20 flex flex-col gap-3 transition-all duration-300",
-        @poi_step != :idle && "opacity-0 pointer-events-none"
+        (@poi_step != :idle or @geofence_step != :idle) && "opacity-0 pointer-events-none"
       ]}>
         <button
           id="add-geofence-btn"
-          class="w-12 h-12 bg-white/90 backdrop-blur-sm rounded-full shadow-lg border border-gray-200 flex items-center justify-center hover:bg-gray-100 active:scale-95 transition-all"
-          title="Draw geofence (coming soon)"
-          disabled
+          phx-click="open_geofence_form"
+          class="w-12 h-12 bg-white/90 backdrop-blur-sm rounded-full shadow-lg border border-gray-200 flex items-center justify-center hover:bg-indigo-50 hover:border-indigo-300 active:scale-95 transition-all"
+          title="Draw geofence"
         >
-          <.icon name="hero-map" class="w-5 h-5 text-gray-400" />
+          <.icon name="hero-map" class="w-5 h-5 text-indigo-500" />
         </button>
         <button
           id="add-poi-btn"
@@ -609,12 +829,191 @@ defmodule PlatserWeb.MapLive do
         </div>
       </div>
 
+      <%!-- Geofence creation form (bottom sheet) --%>
+      <div
+        id="geofence-form-sheet"
+        class={[
+          "fixed inset-x-0 bottom-0 z-30 transform transition-transform duration-300 ease-out",
+          if(@geofence_step == :editing, do: "translate-y-0", else: "translate-y-full")
+        ]}
+      >
+        <div class="bg-white rounded-t-2xl border-t border-gray-200 shadow-2xl max-h-[85vh] flex flex-col">
+          <%!-- Sheet header --%>
+          <div class="flex items-center justify-between px-5 pt-4 pb-3 border-b border-gray-100">
+            <div class="w-10 h-1 bg-gray-200 rounded-full absolute top-2 left-1/2 -translate-x-1/2" />
+            <h2 class="text-base font-semibold text-gray-900">New Geofence</h2>
+            <button
+              phx-click="cancel_geofence_form"
+              class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
+            >
+              <.icon name="hero-x-mark" class="w-4 h-4 text-gray-500" />
+            </button>
+          </div>
+
+          <%!-- Form body --%>
+          <div class="flex-1 overflow-y-auto">
+            <.form
+              for={%{}}
+              id="geofence-form"
+              phx-change="validate_geofence"
+              phx-submit="save_geofence"
+              class="px-5 py-4 space-y-4"
+            >
+              <%!-- Polygon indicator --%>
+              <div class="flex items-center gap-2 px-3 py-2 rounded-xl border border-indigo-300 bg-indigo-50 text-sm text-indigo-700">
+                <.icon name="hero-check-circle" class="w-4 h-4 shrink-0" />
+                <span>
+                  Polygon drawn — {length(@geofence_vertices)} vertices
+                </span>
+                <button
+                  type="button"
+                  phx-click="cancel_geofence_form"
+                  class="ml-auto px-2 py-0.5 rounded-lg border border-indigo-200 text-xs text-indigo-600 hover:bg-indigo-100 transition-colors"
+                >
+                  Redraw
+                </button>
+              </div>
+
+              <%!-- Form errors --%>
+              <%= if @geofence_errors != [] do %>
+                <div class="rounded-xl bg-red-50 border border-red-200 p-3 space-y-1">
+                  <%= for {_field, msg} <- @geofence_errors do %>
+                    <p class="text-xs text-red-600">{msg}</p>
+                  <% end %>
+                </div>
+              <% end %>
+
+              <%!-- Name --%>
+              <div>
+                <label for="geofence-name" class="block text-sm font-medium text-gray-700 mb-1">
+                  Name <span class="text-red-500">*</span>
+                </label>
+                <input
+                  id="geofence-name"
+                  type="text"
+                  name="geofence[name]"
+                  value={@geofence_name}
+                  placeholder="e.g. Base Camp"
+                  required
+                  class="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition text-sm"
+                />
+              </div>
+
+              <%!-- Purpose --%>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Purpose</label>
+                <div class="grid grid-cols-3 gap-2">
+                  <%= for purpose <- @geofence_purposes do %>
+                    <label class={[
+                      "flex flex-col items-center gap-1 p-2 rounded-xl border cursor-pointer transition-all",
+                      if(to_string(purpose) == @geofence_purpose,
+                        do: "border-indigo-500 bg-indigo-50 text-indigo-700",
+                        else: "border-gray-200 bg-white text-gray-600 hover:border-gray-300"
+                      )
+                    ]}>
+                      <input
+                        type="radio"
+                        name="geofence[purpose]"
+                        value={purpose}
+                        checked={to_string(purpose) == @geofence_purpose}
+                        class="sr-only"
+                      />
+                      <.icon
+                        name={purpose_icon(purpose)}
+                        class={[
+                          "w-5 h-5",
+                          if(to_string(purpose) == @geofence_purpose,
+                            do: "text-indigo-600",
+                            else: ""
+                          )
+                        ]}
+                      />
+                      <span class="text-xs font-medium capitalize leading-tight text-center">
+                        {purpose |> to_string() |> String.replace("_", " ")}
+                      </span>
+                    </label>
+                  <% end %>
+                </div>
+              </div>
+
+              <%!-- Color --%>
+              <div>
+                <label for="geofence-color" class="block text-sm font-medium text-gray-700 mb-2">
+                  Color
+                </label>
+                <div class="flex items-center gap-3 flex-wrap">
+                  <div class="flex items-center gap-2">
+                    <div
+                      class="w-8 h-8 rounded-lg border-2 border-white shadow ring-1 ring-gray-200 shrink-0"
+                      style={"background-color: #{@geofence_color}"}
+                    />
+                    <input
+                      id="geofence-color"
+                      type="color"
+                      name="geofence[color]"
+                      value={@geofence_color}
+                      class="w-10 h-10 rounded-lg border border-gray-300 cursor-pointer p-0.5 bg-white"
+                    />
+                  </div>
+                  <div class="flex gap-1.5 flex-wrap">
+                    <%= for {_purpose_key, color} <- @purpose_colors do %>
+                      <label
+                        class="cursor-pointer"
+                        title={color}
+                      >
+                        <input
+                          type="radio"
+                          name="geofence[color]"
+                          value={color}
+                          checked={@geofence_color == color}
+                          class="sr-only"
+                        />
+                        <span
+                          class={[
+                            "block w-6 h-6 rounded-full border-2 border-white shadow ring-1 transition-transform hover:scale-110 active:scale-95",
+                            if(@geofence_color == color,
+                              do: "ring-gray-600 scale-110",
+                              else: "ring-gray-200"
+                            )
+                          ]}
+                          style={"background-color: #{color}"}
+                        />
+                      </label>
+                    <% end %>
+                  </div>
+                </div>
+              </div>
+
+              <%!-- Actions --%>
+              <div class="flex gap-2 pt-1 pb-2">
+                <button
+                  type="submit"
+                  name="publish"
+                  value="false"
+                  class="flex-1 py-2.5 rounded-xl border border-gray-300 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 active:scale-95 transition-all"
+                >
+                  Save draft
+                </button>
+                <button
+                  type="submit"
+                  name="publish"
+                  value="true"
+                  class="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 active:scale-95 transition-all"
+                >
+                  Publish
+                </button>
+              </div>
+            </.form>
+          </div>
+        </div>
+      </div>
+
       <%!-- Activity feed drawer --%>
       <div
         id="activity-drawer"
         class={[
           "fixed bottom-0 left-0 right-0 z-20 transform transition-transform duration-300 ease-in-out",
-          @poi_step != :idle && "opacity-0 pointer-events-none",
+          (@poi_step != :idle or @geofence_step != :idle) && "opacity-0 pointer-events-none",
           if(not @drawer_open, do: "translate-y-[calc(100%-3.5rem)]")
         ]}
       >
@@ -762,4 +1161,11 @@ defmodule PlatserWeb.MapLive do
   defp category_icon(:meeting_point), do: "hero-user-group"
   defp category_icon(:food), do: "hero-shopping-bag"
   defp category_icon(:other), do: "hero-tag"
+
+  @spec purpose_icon(atom()) :: String.t()
+  defp purpose_icon(:boundary), do: "hero-map"
+  defp purpose_icon(:meeting_zone), do: "hero-user-group"
+  defp purpose_icon(:restricted), do: "hero-no-symbol"
+  defp purpose_icon(:camp_area), do: "hero-home"
+  defp purpose_icon(:other), do: "hero-tag"
 end

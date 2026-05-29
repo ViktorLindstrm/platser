@@ -93,6 +93,8 @@ export default {
     this.mapReady = false
     this.pendingCallbacks = []
     this.pickMode = false
+    this.drawMode = false
+    this.drawVertices = []
 
     this.map = new maplibregl.Map({
       container: this.el,
@@ -116,10 +118,16 @@ export default {
     })
 
     this.map.on("click", e => {
-      if (!this.pickMode) return
-      const {lat, lng} = e.lngLat
-      this.pushEvent("poi_location_picked", {lat, lng})
-      this._disablePickMode()
+      if (this.pickMode) {
+        const {lat, lng} = e.lngLat
+        this.pushEvent("poi_location_picked", {lat, lng})
+        this._disablePickMode()
+      } else if (this.drawMode) {
+        const {lat, lng} = e.lngLat
+        this.drawVertices.push([lng, lat])
+        this._updateDrawPreview()
+        this.pushEvent("vertex_added", {vertices: this.drawVertices})
+      }
     })
 
     this.handleEvent("map_init", ({pois, geofences}) => {
@@ -132,6 +140,24 @@ export default {
 
     this.handleEvent("disable_location_pick", () => {
       this._disablePickMode()
+    })
+
+    this.handleEvent("enable_draw_mode", () => {
+      this.runWhenReady(() => this._enableDrawMode())
+    })
+
+    this.handleEvent("disable_draw_mode", () => {
+      this.runWhenReady(() => this._disableDrawMode())
+    })
+
+    this.handleEvent("undo_last_vertex", () => {
+      this.runWhenReady(() => {
+        if (this.drawVertices.length > 0) {
+          this.drawVertices.pop()
+          this._updateDrawPreview()
+          this.pushEvent("vertex_added", {vertices: this.drawVertices})
+        }
+      })
     })
 
     this.handleEvent("poi_added", feature => {
@@ -177,6 +203,98 @@ export default {
     this.pickMode = false
     this.el.style.cursor = ""
     if (this.map) this.map.getCanvas().style.cursor = ""
+  },
+
+  _enableDrawMode() {
+    this.drawMode = true
+    this.drawVertices = []
+    this.el.style.cursor = "crosshair"
+    this.map.getCanvas().style.cursor = "crosshair"
+    this._setupDrawPreviewLayers()
+  },
+
+  _disableDrawMode() {
+    this.drawMode = false
+    this.drawVertices = []
+    this.el.style.cursor = ""
+    this.map.getCanvas().style.cursor = ""
+    this._clearDrawPreview()
+  },
+
+  _setupDrawPreviewLayers() {
+    if (!this.map.getSource("draw-preview")) {
+      this.map.addSource("draw-preview", {
+        type: "geojson",
+        data: {type: "FeatureCollection", features: []},
+      })
+
+      this.map.addLayer({
+        id: "draw-fill",
+        type: "fill",
+        source: "draw-preview",
+        filter: ["==", "$type", "Polygon"],
+        paint: {"fill-color": "#6366F1", "fill-opacity": 0.15},
+      })
+
+      this.map.addLayer({
+        id: "draw-outline",
+        type: "line",
+        source: "draw-preview",
+        paint: {
+          "line-color": "#6366F1",
+          "line-width": 2,
+          "line-dasharray": [3, 2],
+        },
+      })
+
+      this.map.addLayer({
+        id: "draw-vertices",
+        type: "circle",
+        source: "draw-preview",
+        filter: ["==", "$type", "Point"],
+        paint: {
+          "circle-radius": 6,
+          "circle-color": "#6366F1",
+          "circle-stroke-width": 2,
+          "circle-stroke-color": "#ffffff",
+        },
+      })
+    }
+  },
+
+  _updateDrawPreview() {
+    const verts = this.drawVertices
+    const features = []
+
+    verts.forEach(([lng, lat]) => {
+      features.push({
+        type: "Feature",
+        geometry: {type: "Point", coordinates: [lng, lat]},
+        properties: {},
+      })
+    })
+
+    if (verts.length >= 3) {
+      features.push({
+        type: "Feature",
+        geometry: {type: "Polygon", coordinates: [[...verts, verts[0]]]},
+        properties: {},
+      })
+    } else if (verts.length >= 2) {
+      features.push({
+        type: "Feature",
+        geometry: {type: "LineString", coordinates: verts},
+        properties: {},
+      })
+    }
+
+    const source = this.map.getSource("draw-preview")
+    if (source) source.setData({type: "FeatureCollection", features})
+  },
+
+  _clearDrawPreview() {
+    const source = this.map.getSource("draw-preview")
+    if (source) source.setData({type: "FeatureCollection", features: []})
   },
 
   _initSources(pois, geofences) {

@@ -13,6 +13,9 @@ defmodule Platser.Map do
 
     resource Platser.Map.Geofence do
       define :list_geofences_for_event, action: :list_by_event, args: [:event_id]
+      define :create_geofence, action: :create
+      define :get_geofence, action: :read, get_by: [:id]
+      define :publish_geofence, action: :publish
       define :delete_geofence, action: :destroy
     end
   end
