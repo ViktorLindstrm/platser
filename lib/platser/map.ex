@@ -9,6 +9,7 @@ defmodule Platser.Map do
       define :get_poi, action: :read, get_by: [:id]
       define :update_poi, action: :update
       define :update_poi_metadata, action: :update_metadata
+      define :update_poi_comment, action: :update_comment
       define :publish_poi, action: :publish
       define :delete_poi, action: :destroy
     end
@@ -19,6 +20,7 @@ defmodule Platser.Map do
       define :get_geofence, action: :read, get_by: [:id]
       define :update_geofence, action: :update
       define :update_geofence_metadata, action: :update_metadata
+      define :update_geofence_comment, action: :update_comment
       define :publish_geofence, action: :publish
       define :delete_geofence, action: :destroy
     end

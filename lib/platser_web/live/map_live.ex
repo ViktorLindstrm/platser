@@ -114,6 +114,7 @@ defmodule PlatserWeb.MapLive do
             if connected?(socket) do
               Phoenix.PubSub.subscribe(Platser.PubSub, "event:#{event_id}:map_objects")
               Phoenix.PubSub.subscribe(Platser.PubSub, "event:#{event_id}:activity")
+              Phoenix.PubSub.subscribe(Platser.PubSub, "event:#{event_id}:settings")
               Phoenix.PubSub.subscribe(Platser.PubSub, EventPresence.topic(event_id))
               send(self(), :push_map_init)
               socket
@@ -163,6 +164,10 @@ defmodule PlatserWeb.MapLive do
       |> push_event("member_locations_init", %{locations: member_locations})
 
     {:noreply, socket}
+  end
+
+  def handle_info({:event_settings_updated, updated_event}, socket) do
+    {:noreply, assign(socket, :event, updated_event)}
   end
 
   def handle_info({:poi_added, poi}, socket) do
@@ -501,7 +506,7 @@ defmodule PlatserWeb.MapLive do
 
     case socket.assigns.selected_map_object do
       %{kind: :poi, item: %Poi{} = poi} ->
-        case PlatserMap.update_poi_metadata(poi, %{comment: comment}, actor: actor) do
+        case PlatserMap.update_poi_comment(poi, %{comment: comment}, actor: actor) do
           {:ok, updated} ->
             {:noreply, select_map_object(socket, :poi, updated)}
 
@@ -510,7 +515,7 @@ defmodule PlatserWeb.MapLive do
         end
 
       %{kind: :geofence, item: %Geofence{} = geofence} ->
-        case PlatserMap.update_geofence_metadata(geofence, %{comment: comment}, actor: actor) do
+        case PlatserMap.update_geofence_comment(geofence, %{comment: comment}, actor: actor) do
           {:ok, updated} ->
             {:noreply, select_map_object(socket, :geofence, updated)}
 
@@ -2162,7 +2167,7 @@ defmodule PlatserWeb.MapLive do
               <% end %>
 
               <%!-- Comment --%>
-              <%= if @selected_map_object_can_manage do %>
+              <%= if @selected_map_object_can_manage or @event.allow_public_comments do %>
                 <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
                   <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
                     Comment

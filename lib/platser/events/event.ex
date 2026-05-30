@@ -40,6 +40,12 @@ defmodule Platser.Events.Event do
       change Platser.Events.Changes.GenerateJoinCode
     end
 
+    update :update_settings do
+      description "Updates event settings. Admin only."
+      require_atomic? false
+      accept [:allow_public_comments]
+    end
+
     update :set_bounds do
       description "Sets or replaces the geographic bounds for the event map."
       require_atomic? false
@@ -66,6 +72,10 @@ defmodule Platser.Events.Event do
     end
 
     policy action(:regenerate_join_code) do
+      authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
+    end
+
+    policy action(:update_settings) do
       authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
     end
 
@@ -96,6 +106,11 @@ defmodule Platser.Events.Event do
     end
 
     attribute :bounds, Platser.Types.Geometry
+
+    attribute :allow_public_comments, :boolean do
+      allow_nil? false
+      default false
+    end
   end
 
   relationships do

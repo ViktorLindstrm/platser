@@ -55,6 +55,29 @@ defmodule PlatserWeb.Events.DashboardLive do
     end
   end
 
+  def handle_event("update_settings", %{"allow_public_comments" => val}, socket) do
+    actor = socket.assigns.current_user
+    event = socket.assigns.event
+    allow = val == "true"
+
+    case Events.update_event_settings(event, %{allow_public_comments: allow}, actor: actor) do
+      {:ok, updated_event} ->
+        Phoenix.PubSub.broadcast(
+          Platser.PubSub,
+          "event:#{event.id}:settings",
+          {:event_settings_updated, updated_event}
+        )
+
+        {:noreply,
+         socket
+         |> assign(:event, updated_event)
+         |> put_flash(:info, "Settings saved.")}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Could not save settings.")}
+    end
+  end
+
   def handle_event("delete_poi", %{"id" => poi_id}, socket) do
     actor = socket.assigns.current_user
 
@@ -171,6 +194,45 @@ defmodule PlatserWeb.Events.DashboardLive do
             <% end %>
           </p>
         </section>
+
+        <%!-- Event settings (admin only) --%>
+        <%= if @is_admin do %>
+          <section
+            id="event-settings-section"
+            class="bg-base-100 border border-base-200 rounded-2xl p-6 space-y-4"
+          >
+            <h2 class="text-sm font-semibold text-base-content/70 uppercase tracking-wider">
+              Settings
+            </h2>
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium text-base-content">Public comments</p>
+                <p class="text-xs text-base-content/50 mt-0.5">
+                  Allow all event members to write comments on map items.
+                </p>
+              </div>
+              <button
+                id="toggle-public-comments-btn"
+                phx-click="update_settings"
+                phx-value-allow_public_comments={to_string(!@event.allow_public_comments)}
+                class={[
+                  "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none",
+                  if(@event.allow_public_comments,
+                    do: "bg-primary",
+                    else: "bg-base-300"
+                  )
+                ]}
+                role="switch"
+                aria-checked={to_string(@event.allow_public_comments)}
+              >
+                <span class={[
+                  "pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition duration-200 ease-in-out",
+                  if(@event.allow_public_comments, do: "translate-x-5", else: "translate-x-0")
+                ]} />
+              </button>
+            </div>
+          </section>
+        <% end %>
 
         <%!-- Members section --%>
         <section id="members-section" class="space-y-4">

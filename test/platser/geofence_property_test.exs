@@ -377,7 +377,7 @@ defmodule Platser.GeofencePropertyTest do
   end
 
   describe "comment field" do
-    property "comment set via update_metadata is persisted and retrieved" do
+    property "comment set via update_comment is persisted and retrieved" do
       check all(
               comment <- StreamData.string(:printable, min_length: 1, max_length: 1000),
               max_runs: 25
@@ -404,7 +404,7 @@ defmodule Platser.GeofencePropertyTest do
           )
 
         assert {:ok, updated} =
-                 PlatserMap.update_geofence_metadata(
+                 PlatserMap.update_geofence_comment(
                    geofence,
                    %{comment: comment},
                    actor: user
@@ -435,7 +435,7 @@ defmodule Platser.GeofencePropertyTest do
           )
 
         assert {:ok, updated} =
-                 PlatserMap.update_geofence_metadata(
+                 PlatserMap.update_geofence_comment(
                    geofence,
                    %{comment: nil},
                    actor: user

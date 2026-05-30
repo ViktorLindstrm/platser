@@ -64,12 +64,17 @@ defmodule Platser.Map.Geofence do
     end
 
     update :update_metadata do
-      accept [:name, :description, :comment, :color]
+      accept [:name, :description, :color]
       require_atomic? false
 
       validate fn changeset, _ ->
         validate_color(Ash.Changeset.get_attribute(changeset, :color))
       end
+    end
+
+    update :update_comment do
+      accept [:comment]
+      require_atomic? false
     end
 
     destroy :destroy do
@@ -98,6 +103,16 @@ defmodule Platser.Map.Geofence do
     policy action(:update_metadata) do
       authorize_if expr(creator_id == ^actor(:id))
       authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
+    end
+
+    policy action(:update_comment) do
+      authorize_if expr(creator_id == ^actor(:id))
+      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
+
+      authorize_if expr(
+                     event.allow_public_comments == true and
+                       exists(event.memberships, user_id == ^actor(:id))
+                   )
     end
 
     policy action(:publish) do
