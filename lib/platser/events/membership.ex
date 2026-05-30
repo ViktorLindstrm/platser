@@ -26,6 +26,7 @@ defmodule Platser.Events.Membership do
       change set_attribute(:role, :member)
       change relate_actor(:user)
       change Platser.Events.Changes.SetEventByJoinCode
+      change Platser.Events.Changes.BroadcastJoin
     end
 
     create :create_admin do

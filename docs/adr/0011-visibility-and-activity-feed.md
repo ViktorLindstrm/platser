@@ -51,3 +51,17 @@ is created or published, all members should be notified via a live activity feed
 The activity drawer now includes filter chips for all, check-ins, geofence events, published
 items, and comments. Comment saves create `comment_added` activity entries so the feed and the
 inspection drawer can share the same activity model.
+
+## Amendment: joined_event activity entries (task #42)
+
+When a user joins an event via `Events.join_event/2`, a `:joined_event` `Activity.Entry` is
+created automatically by `Platser.Events.Changes.BroadcastJoin` — an `after_transaction` change
+on the `Membership` resource's `:join` action. This keeps the activity-entry concern in the
+domain layer (not in the LiveView) and is consistent with how POI/geofence publish events are
+captured via `BroadcastPublish` / `BroadcastGeofencePublish`.
+
+The admin membership created at event creation time does **not** go through the `:join` action
+and therefore does not produce a `:joined_event` entry.
+
+The entry always carries `subject_type: "user"` and `subject_id: actor.id`, and is broadcast on
+`event:{id}:activity` so connected LiveViews update the feed in real time.
