@@ -134,7 +134,6 @@ defmodule PlatserWeb.MapLiveTest do
 
     assert has_element?(view, "#map-item-drawer")
     assert has_element?(view, "#map-item-status-badge")
-    assert has_element?(view, "#map-item-visibility-badge")
     assert has_element?(view, "#map-item-focus-btn")
     assert has_element?(view, "#map-item-edit-btn")
     assert has_element?(view, "#map-item-publish-btn")
@@ -159,7 +158,6 @@ defmodule PlatserWeb.MapLiveTest do
 
     assert has_element?(view, "#map-item-drawer")
     assert has_element?(view, "#map-item-status-badge")
-    assert has_element?(view, "#map-item-visibility-badge")
     assert has_element?(view, "#map-item-focus-btn")
     assert has_element?(view, "#map-item-edit-btn")
     assert has_element?(view, "#map-item-publish-btn")
@@ -385,7 +383,7 @@ defmodule PlatserWeb.MapLiveTest do
     assert has_element?(view, "#map-item-drawer")
   end
 
-  test "photo strip is shown in inspection drawer when POI has attachments", %{conn: conn} do
+  test "photo carousel is shown in inspection drawer when POI has attachments", %{conn: conn} do
     user = create_user("photo_strip_with")
     event = create_event(user)
     poi = create_poi(user, event)
@@ -396,11 +394,13 @@ defmodule PlatserWeb.MapLiveTest do
 
     render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
 
-    assert has_element?(view, "#map-item-photo-strip")
+    assert has_element?(view, "#map-item-carousel")
     assert has_element?(view, "#photo-#{attachment.id}")
   end
 
-  test "photo strip is not shown in inspection drawer when POI has no attachments", %{conn: conn} do
+  test "photo carousel is not shown in inspection drawer when POI has no attachments", %{
+    conn: conn
+  } do
     user = create_user("photo_strip_empty")
     event = create_event(user)
     poi = create_poi(user, event)
@@ -411,10 +411,10 @@ defmodule PlatserWeb.MapLiveTest do
     render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
 
     assert has_element?(view, "#map-item-drawer")
-    refute has_element?(view, "#map-item-photo-strip")
+    refute has_element?(view, "#map-item-carousel")
   end
 
-  test "photo strip survives publish action on inspection drawer", %{conn: conn} do
+  test "photo carousel survives publish action on inspection drawer", %{conn: conn} do
     user = create_user("photo_strip_publish")
     event = create_event(user)
     poi = create_poi(user, event)
@@ -425,12 +425,12 @@ defmodule PlatserWeb.MapLiveTest do
 
     render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
 
-    assert has_element?(view, "#map-item-photo-strip")
+    assert has_element?(view, "#map-item-carousel")
 
     render_click(element(view, "#map-item-publish-btn"))
 
     assert has_element?(view, "#map-item-drawer")
-    assert has_element?(view, "#map-item-photo-strip")
+    assert has_element?(view, "#map-item-carousel")
     assert has_element?(view, "#photo-#{attachment.id}")
   end
 end

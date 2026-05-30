@@ -97,3 +97,49 @@ records loaded for both POIs and geofences.
   prefix making them opaque to guessing. Production deployments should replace
   `Plug.Static` serving with signed CDN URLs.
 - Attachments in `list_by_poi` and `list_by_geofence` are sorted by `inserted_at asc` for deterministic order.
+
+## Amendment 2: Compact metadata, image carousel, creator line (task #34)
+
+**Status: Implemented**
+
+### Removed: Big category/purpose cards and raw coordinates
+
+The metadata grid (showing category label, visibility, and raw latitude/longitude for POI; purpose and vertex count for geofence as separate large cards) has been removed. Raw coordinates are not useful to end users.
+
+### Compact category/purpose chip
+
+Category (POI) and purpose (geofence) are now shown as a compact inline chip in the badge row alongside the status badge:
+
+- POI chip includes the category icon and human-readable label (e.g., 🏕 camping).
+- Geofence chip includes a small color swatch (using the geofence's `color` hex value) and the purpose label.
+- Geofence vertex count is shown as a plain `pts` stat inline in the same row.
+
+### Creator and published date row
+
+A new "Added by" line is rendered below the badge row:
+- Shows `item.creator.display_name` when the creator relationship is loaded.
+- If `item.published_at` is present, appends "· Published DD Mon YYYY" using `Calendar.strftime`.
+- Loaded in both `load_selected_map_object/3` and `select_map_object/3` via a new `load_item_creator/2` helper.
+- On load failure (policy denial, error), the item is returned unchanged and a warning is logged; the row is simply omitted.
+
+### Image carousel replaces horizontal scroll strip
+
+The photo strip (`#map-item-photo-strip`, horizontal overflow scroll) is replaced by a full-width slide carousel (`#map-item-carousel`):
+
+- CSS `translateX` approach — a `[data-track]` flex container slides via transform on prev/next arrow clicks.
+- Dot indicators update their opacity to show current position.
+- Touch swipe supported via `touchstart`/`touchend` delta detection.
+- Implemented as a colocated Phoenix LiveView hook (`.Carousel`).
+- The hook uses a `data-item-key={"kind-id"}` attribute to detect item changes in `updated()` and only reset the slide index when the item changes (not on every LiveView patch).
+
+### Visibility badge removed
+
+The separate `#map-item-visibility-badge` element is removed. The draft/published distinction is fully conveyed by the `#map-item-status-badge` color (amber = draft, emerald = published). Visibility information is no longer shown as a separate badge.
+
+### Comment visibility for non-managers
+
+Non-managers only see the comment if it is non-empty; if empty it is hidden entirely. Managers always see the editable textarea. This prevents the UI from showing a blank input field for read-only participants.
+
+### Promoted Publish button
+
+The Publish button is now rendered in its own full-width row above the focus/edit/delete action bar, making it the primary CTA when a draft item is selected.

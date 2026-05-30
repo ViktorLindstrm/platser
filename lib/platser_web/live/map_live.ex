@@ -1011,6 +1011,7 @@ defmodule PlatserWeb.MapLive do
   defp load_selected_map_object("poi", id, actor) do
     case PlatserMap.get_poi(id, actor: actor) do
       {:ok, %Poi{} = poi} ->
+        poi = load_item_creator(poi, actor)
         {:ok, %{kind: :poi, item: poi, attachments: load_poi_attachments(poi.id, actor)}}
 
       _ ->
@@ -1021,6 +1022,8 @@ defmodule PlatserWeb.MapLive do
   defp load_selected_map_object("geofence", id, actor) do
     case PlatserMap.get_geofence(id, actor: actor) do
       {:ok, %Geofence{} = geofence} ->
+        geofence = load_item_creator(geofence, actor)
+
         {:ok,
          %{
            kind: :geofence,
@@ -1071,7 +1074,20 @@ defmodule PlatserWeb.MapLive do
     end
   end
 
-  @spec focus_map_object_payload(selected_map_object()) :: map()
+  @spec load_item_creator(Poi.t() | Geofence.t(), Platser.Accounts.User.t()) ::
+          Poi.t() | Geofence.t()
+  defp load_item_creator(item, actor) do
+    case Ash.load(item, [:creator], actor: actor) do
+      {:ok, loaded} ->
+        loaded
+
+      {:error, reason} ->
+        require Logger
+        Logger.warning("Failed to load creator for #{item.id}: #{inspect(reason)}")
+        item
+    end
+  end
+
   defp focus_map_object_payload(%{kind: :poi, item: %Poi{} = poi}) do
     %{
       kind: "poi",
@@ -1093,6 +1109,7 @@ defmodule PlatserWeb.MapLive do
         ) :: Phoenix.LiveView.Socket.t()
   defp select_map_object(socket, :poi, %Poi{} = poi) do
     actor = socket.assigns.current_user
+    poi = load_item_creator(poi, actor)
     attachments = load_poi_attachments(poi.id, actor)
 
     socket
@@ -1107,6 +1124,7 @@ defmodule PlatserWeb.MapLive do
         ) :: Phoenix.LiveView.Socket.t()
   defp select_map_object(socket, :geofence, %Geofence{} = geofence) do
     actor = socket.assigns.current_user
+    geofence = load_item_creator(geofence, actor)
     attachments = load_geofence_attachments(geofence.id, actor)
 
     socket
@@ -2021,6 +2039,7 @@ defmodule PlatserWeb.MapLive do
           ]}
         >
           <div class="bg-white rounded-t-2xl border-t border-gray-200 shadow-2xl flex flex-col md:rounded-none md:rounded-l-2xl md:border-l md:border-y md:border-r-0 md:h-full">
+            <%!-- Header --%>
             <div class="flex items-start justify-between gap-4 px-5 pt-4 pb-3 border-b border-gray-100 shrink-0">
               <div class="flex items-start gap-3 min-w-0">
                 <div class="w-11 h-11 rounded-2xl bg-gray-100 flex items-center justify-center shrink-0">
@@ -2044,8 +2063,9 @@ defmodule PlatserWeb.MapLive do
               </button>
             </div>
 
-            <div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-              <div class="flex flex-wrap gap-2">
+            <div class="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              <%!-- Status badge + kind-specific chip --%>
+              <div class="flex flex-wrap items-center gap-2">
                 <span
                   id="map-item-status-badge"
                   class={[
@@ -2058,106 +2078,127 @@ defmodule PlatserWeb.MapLive do
                 >
                   {MapInspection.status_label(MapInspection.resource_visibility(item))}
                 </span>
-                <span
-                  id="map-item-visibility-badge"
-                  class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700"
-                >
-                  {MapInspection.visibility_label(MapInspection.resource_visibility(item))}
-                </span>
-                <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">
-                  {MapInspection.kind_label(kind)}
-                </span>
-              </div>
-
-              <%= if item.description && item.description != "" do %>
-                <div>
-                  <p class="text-sm text-gray-600 leading-relaxed">{item.description}</p>
-                </div>
-              <% end %>
-
-              <%!-- Photo gallery strip --%>
-              <%= if @selected_map_object.attachments != [] do %>
-                <div id="map-item-photo-strip">
-                  <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                    Photos
-                  </p>
-                  <div class="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-                    <%= for attachment <- @selected_map_object.attachments do %>
-                      <a
-                        id={"photo-#{attachment.id}"}
-                        href={attachment.path}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        class="shrink-0 group"
-                      >
-                        <img
-                          src={attachment.path}
-                          alt={attachment.filename}
-                          class="h-24 w-24 object-cover rounded-xl border border-gray-200 group-hover:opacity-90 group-hover:scale-[1.02] transition-all"
-                        />
-                      </a>
-                    <% end %>
-                  </div>
-                </div>
-              <% end %>
-
-              <div class="grid grid-cols-1 gap-3">
                 <%= if kind == :poi do %>
-                  <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
-                      Category
-                    </p>
-                    <p class="text-sm font-medium text-gray-900 capitalize">
-                      {item.category |> to_string() |> String.replace("_", " ")}
-                    </p>
-                  </div>
-                  <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
-                      Location
-                    </p>
-                    <p class="text-sm font-medium text-gray-900">
-                      {format_coords(item.location)}
-                    </p>
-                  </div>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 capitalize">
+                    <.icon name={category_icon(item.category)} class="w-3 h-3" />
+                    {item.category |> to_string() |> String.replace("_", " ")}
+                  </span>
                 <% else %>
-                  <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
-                      Purpose
-                    </p>
-                    <p class="text-sm font-medium text-gray-900 capitalize">
-                      {item.purpose |> to_string() |> String.replace("_", " ")}
-                    </p>
-                  </div>
-                  <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
-                      Geometry
-                    </p>
-                    <p class="text-sm font-medium text-gray-900">
-                      {geofence_vertex_count(item.geometry)} vertices
-                    </p>
-                  </div>
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 capitalize">
+                    <span
+                      class="w-2 h-2 rounded-full shrink-0"
+                      style={"background-color: #{item.color}"}
+                    >
+                    </span>
+                    {item.purpose |> to_string() |> String.replace("_", " ")}
+                  </span>
+                  <span class="text-xs text-gray-400">
+                    {geofence_vertex_count(item.geometry)} pts
+                  </span>
                 <% end %>
               </div>
 
-              <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                  Comment
+              <%!-- Creator + published date --%>
+              <%= if is_struct(item.creator, Platser.Accounts.User) do %>
+                <p class="text-xs text-gray-400 -mt-1">
+                  Added by {item.creator.display_name}
+                  <%= if item.published_at do %>
+                    · Published {Calendar.strftime(item.published_at, "%d %b %Y")}
+                  <% end %>
                 </p>
-                <textarea
-                  id="map-item-comment"
-                  name="comment"
-                  rows="3"
-                  phx-blur="save_map_object_comment"
-                  disabled={not @selected_map_object_can_manage}
-                  placeholder={
-                    if @selected_map_object_can_manage, do: "Add a comment…", else: "No comment yet"
-                  }
-                  class="w-full resize-none bg-transparent text-sm text-gray-700 leading-relaxed focus:outline-none disabled:cursor-default disabled:text-gray-500 placeholder:text-gray-400"
-                >{item.comment || ""}</textarea>
-              </div>
+              <% end %>
+
+              <%!-- Description --%>
+              <%= if item.description && item.description != "" do %>
+                <p class="text-sm text-gray-600 leading-relaxed">{item.description}</p>
+              <% end %>
+
+              <%!-- Photo carousel --%>
+              <%= if @selected_map_object.attachments != [] do %>
+                <div
+                  id="map-item-carousel"
+                  phx-hook=".Carousel"
+                  data-item-key={"#{kind}-#{item.id}"}
+                  class="relative rounded-2xl overflow-hidden bg-gray-100"
+                >
+                  <div data-track class="flex transition-transform duration-300 ease-in-out">
+                    <%= for attachment <- @selected_map_object.attachments do %>
+                      <div data-slide class="shrink-0 w-full">
+                        <a
+                          id={"photo-#{attachment.id}"}
+                          href={attachment.path}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <img
+                            src={attachment.path}
+                            alt={attachment.filename}
+                            class="w-full h-52 object-cover"
+                          />
+                        </a>
+                      </div>
+                    <% end %>
+                  </div>
+                  <%= if length(@selected_map_object.attachments) > 1 do %>
+                    <button
+                      data-prev
+                      class="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 flex items-center justify-center hover:bg-black/60 transition-colors"
+                    >
+                      <.icon name="hero-chevron-left" class="w-4 h-4 text-white" />
+                    </button>
+                    <button
+                      data-next
+                      class="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 flex items-center justify-center hover:bg-black/60 transition-colors"
+                    >
+                      <.icon name="hero-chevron-right" class="w-4 h-4 text-white" />
+                    </button>
+                    <div class="absolute bottom-2 left-0 right-0 flex justify-center gap-1.5">
+                      <%= for _attachment <- @selected_map_object.attachments do %>
+                        <button data-dot class="w-1.5 h-1.5 rounded-full transition-all bg-white/40" />
+                      <% end %>
+                    </div>
+                  <% end %>
+                </div>
+              <% end %>
+
+              <%!-- Comment --%>
+              <%= if @selected_map_object_can_manage do %>
+                <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                  <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+                    Comment
+                  </p>
+                  <textarea
+                    id="map-item-comment"
+                    name="comment"
+                    rows="3"
+                    phx-blur="save_map_object_comment"
+                    placeholder="Add a comment…"
+                    class="w-full resize-none bg-transparent text-sm text-gray-700 leading-relaxed focus:outline-none placeholder:text-gray-400"
+                  >{item.comment || ""}</textarea>
+                </div>
+              <% else %>
+                <%= if item.comment && item.comment != "" do %>
+                  <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+                      Comment
+                    </p>
+                    <p class="text-sm text-gray-600 leading-relaxed">{item.comment}</p>
+                  </div>
+                <% end %>
+              <% end %>
             </div>
 
-            <div class="border-t border-gray-100 px-5 py-4 shrink-0">
+            <%!-- Action bar --%>
+            <div class="border-t border-gray-100 px-5 py-4 space-y-2 shrink-0">
+              <%= if @selected_map_object_can_manage && MapInspection.resource_status(item) == :draft do %>
+                <button
+                  id="map-item-publish-btn"
+                  phx-click="publish_selected_map_object"
+                  class="w-full py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 active:scale-95 transition-all"
+                >
+                  Publish
+                </button>
+              <% end %>
               <div class="flex gap-2">
                 <button
                   id="map-item-focus-btn"
@@ -2166,17 +2207,7 @@ defmodule PlatserWeb.MapLive do
                 >
                   Focus on map
                 </button>
-
                 <%= if @selected_map_object_can_manage do %>
-                  <%= if MapInspection.resource_status(item) == :draft do %>
-                    <button
-                      id="map-item-publish-btn"
-                      phx-click="publish_selected_map_object"
-                      class="flex-1 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 active:scale-95 transition-all"
-                    >
-                      Publish
-                    </button>
-                  <% end %>
                   <button
                     id="map-item-edit-btn"
                     phx-click="edit_selected_map_object"
@@ -2197,6 +2228,53 @@ defmodule PlatserWeb.MapLive do
           </div>
         </div>
       <% end %>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".Carousel">
+        export default {
+          mounted() {
+            this._key = this.el.dataset.itemKey;
+            this._idx = 0;
+            let startX = 0;
+            this.el.addEventListener('touchstart', e => { startX = e.touches[0].clientX; }, { passive: true });
+            this.el.addEventListener('touchend', e => {
+              const dx = e.changedTouches[0].clientX - startX;
+              if (Math.abs(dx) > 40) this._go(dx < 0 ? 1 : -1);
+            });
+            this._bind();
+            this._update();
+          },
+          updated() {
+            const newKey = this.el.dataset.itemKey;
+            if (newKey !== this._key) { this._key = newKey; this._idx = 0; }
+            this._bind();
+            this._update();
+          },
+          _bind() {
+            this._track = this.el.querySelector('[data-track]');
+            this._slides = Array.from(this.el.querySelectorAll('[data-slide]'));
+            this._dots = Array.from(this.el.querySelectorAll('[data-dot]'));
+            const prev = this.el.querySelector('[data-prev]');
+            const next = this.el.querySelector('[data-next]');
+            if (prev) prev.onclick = () => this._go(-1);
+            if (next) next.onclick = () => this._go(1);
+            this._dots.forEach((dot, i) => { dot.onclick = () => { this._idx = i; this._update(); }; });
+          },
+          _go(dir) {
+            const count = this._slides.length;
+            if (count === 0) return;
+            this._idx = (this._idx + dir + count) % count;
+            this._update();
+          },
+          _update() {
+            if (this._track) {
+              this._track.style.transform = `translateX(-${this._idx * 100}%)`;
+            }
+            this._dots.forEach((dot, i) => {
+              dot.classList.toggle('bg-white', i === this._idx);
+              dot.classList.toggle('bg-white/40', i !== this._idx);
+            });
+          }
+        }
+      </script>
 
       <%!-- Activity feed — mobile: slide-up drawer, desktop: right side panel --%>
       <div
