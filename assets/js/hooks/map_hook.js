@@ -189,10 +189,11 @@ export default {
         })
 
         const feature = features[0]
-        if (feature?.id) {
+        const featureId = feature?.properties?.id
+        if (featureId) {
           this.pushEvent("inspect_map_object", {
             kind: feature.layer?.id === "poi-circles" ? "poi" : "geofence",
-            id: feature.id,
+            id: featureId,
           })
         }
       }
