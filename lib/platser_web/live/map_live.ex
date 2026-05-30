@@ -1574,6 +1574,16 @@ defmodule PlatserWeb.MapLive do
       <%!-- Top bar: event name --%>
       <div class="fixed top-0 left-0 right-0 z-20 pointer-events-none">
         <div class="flex items-center justify-between px-4 pt-4">
+          <div class="flex items-center gap-2 pointer-events-auto">
+            <.link
+              navigate={~p"/events/#{@event.id}/dashboard"}
+              class="bg-white/90 backdrop-blur-sm rounded-xl px-3 py-2 shadow-lg border border-gray-200 hover:bg-white transition-colors flex items-center gap-1.5"
+              title="Back to dashboard"
+            >
+              <.icon name="hero-arrow-left" class="w-4 h-4 text-gray-500" />
+              <span class="text-sm font-semibold text-gray-900">Dashboard</span>
+            </.link>
+          </div>
           <div class="bg-white/90 backdrop-blur-sm rounded-xl px-4 py-2 shadow-lg border border-gray-200 pointer-events-auto">
             <h1 class="text-sm font-semibold text-gray-900 truncate max-w-[60vw]">
               {@event.name}
@@ -1594,8 +1604,9 @@ defmodule PlatserWeb.MapLive do
               <% end %>
             </button>
             <.link
-              navigate={~p"/join/#{@event.join_code}"}
-              class="bg-white/90 backdrop-blur-sm rounded-xl px-3 py-2 shadow-lg border border-gray-200"
+              navigate={~p"/events/#{@event.id}/dashboard"}
+              class="bg-white/90 backdrop-blur-sm rounded-xl px-3 py-2 shadow-lg border border-gray-200 hover:bg-white transition-colors"
+              title="View members"
             >
               <.icon name="hero-users" class="w-4 h-4 text-gray-500" />
             </.link>

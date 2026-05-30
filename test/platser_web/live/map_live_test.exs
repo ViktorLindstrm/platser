@@ -1,5 +1,6 @@
 defmodule PlatserWeb.MapLiveTest do
   use PlatserWeb.ConnCase, async: false
+  use ExUnitProperties
 
   import Phoenix.LiveViewTest
 
@@ -549,5 +550,72 @@ defmodule PlatserWeb.MapLiveTest do
     assert has_element?(view, "#map-item-drawer")
     assert has_element?(view, "#map-item-carousel")
     assert has_element?(view, "#photo-#{attachment.id}")
+  end
+
+  describe "map navigation (task #44)" do
+    property "MapLive always renders a dashboard navigation link" do
+      check all(_data <- StreamData.list_of(StreamData.term(), max_length: 5)) do
+        user = create_user("nav_prop_user")
+        event = create_event(user)
+        conn = sign_in_conn(build_conn(), user)
+
+        {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+        # Property: Dashboard link always exists with correct navigate URL
+        assert has_element?(view, "a[href*='/dashboard']")
+        assert has_element?(view, "a", "Dashboard")
+      end
+    end
+
+    property "MapLive does not render any link to the join form" do
+      check all(_data <- StreamData.list_of(StreamData.term(), max_length: 5)) do
+        user = create_user("no_join_form_prop")
+        event = create_event(user)
+        conn = sign_in_conn(build_conn(), user)
+
+        {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+        # Property: No element links to /join/:code
+        rendered = render(view)
+
+        # Check that /join/ is not present in any link navigation URLs
+        refute String.contains?(rendered, "href=\"/join/")
+        refute String.contains?(rendered, "navigate=\"/join/")
+      end
+    end
+
+    test "users icon navigates to event dashboard, not join form", %{conn: conn} do
+      user = create_user("users_icon_nav")
+      event = create_event(user)
+      conn = sign_in_conn(conn, user)
+
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      # Find the users icon link and verify it points to dashboard
+      users_icon_link = element(view, "a[title='View members']")
+
+      # The link should navigate to the dashboard, not the join form
+      dashboard_url = ~p"/events/#{event.id}/dashboard"
+
+      rendered_link = render(users_icon_link)
+      assert String.contains?(rendered_link, dashboard_url)
+      refute String.contains?(rendered_link, ~p"/join/#{event.join_code}")
+    end
+
+    test "dashboard link navigates to event dashboard successfully", %{conn: conn} do
+      user = create_user("dashboard_link_nav")
+      event = create_event(user)
+      conn = sign_in_conn(conn, user)
+
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      # Find and verify the dashboard link
+      dashboard_link = element(view, "a", "Dashboard")
+      assert dashboard_link
+
+      # Render and verify the link contains the correct URL
+      rendered_link = render(dashboard_link)
+      assert String.contains?(rendered_link, ~p"/events/#{event.id}/dashboard")
+    end
   end
 end
