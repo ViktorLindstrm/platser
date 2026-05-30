@@ -45,6 +45,7 @@ defmodule PlatserWeb.Router do
       live "/events/:id/dashboard", Events.DashboardLive
       live "/join/:code", Events.JoinLive
       live "/events/:event_id/map", MapLive
+      live "/profile", ProfileLive
     end
   end
 

@@ -52,6 +52,13 @@ defmodule Platser.Accounts.User do
       change set_attribute(:is_simulated, true)
     end
 
+    update :update_profile do
+      description "Allows a user to update their display name."
+      require_atomic? false
+      accept [:display_name]
+      validate present(:display_name)
+    end
+
     read :get_by_subject do
       description "Get a user by the subject claim in a JWT"
       argument :subject, :string, allow_nil?: false
@@ -71,6 +78,10 @@ defmodule Platser.Accounts.User do
 
     policy action(:create_simulated) do
       authorize_if actor_present()
+    end
+
+    policy action(:update_profile) do
+      authorize_if expr(id == ^actor(:id))
     end
   end
 

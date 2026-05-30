@@ -31,6 +31,10 @@ defmodule PlatserWeb.Layouts do
     default: nil,
     doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
 
+  attr :current_user, :map,
+    default: nil,
+    doc: "the current authenticated user"
+
   slot :inner_block, required: true
 
   def app(assigns) do
@@ -49,6 +53,12 @@ defmodule PlatserWeb.Layouts do
               class="text-sm text-base-content/70 hover:text-base-content transition-colors"
             >
               My Events
+            </.link>
+            <.link
+              navigate={~p"/profile"}
+              class="text-sm text-base-content/70 hover:text-base-content transition-colors"
+            >
+              Profile
             </.link>
             <.link
               href={~p"/sign-out"}
