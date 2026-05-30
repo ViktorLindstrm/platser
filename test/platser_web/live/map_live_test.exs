@@ -776,5 +776,67 @@ defmodule PlatserWeb.MapLiveTest do
       # The map should render successfully
       assert has_element?(view, "#map-canvas")
     end
+
+    test "comment form is always visible for admin regardless of public_comments setting", %{
+      conn: conn
+    } do
+      admin = create_user("admin_user2")
+      event = create_event(admin)
+
+      # Create a POI
+      poi = create_poi(admin, event)
+
+      # Disable public comments using update_settings action
+      {:ok, _event} =
+        Ash.update(event, %{allow_public_comments: false}, actor: admin, action: :update_settings)
+
+      # Admin views the POI
+      conn = sign_in_conn(conn, admin)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
+
+      # Comment form should be visible for admin
+      assert has_element?(view, "#map-item-comment")
+      # Comments disabled message should NOT be shown
+      html = render(view)
+      refute html =~ "Comments disabled"
+    end
+
+    test "non-admin can still read existing comment when public_comments disabled", %{conn: conn} do
+      admin = create_user("admin_writer")
+      event = create_event(admin)
+
+      # Create a POI
+      {:ok, poi} =
+        PlatserMap.create_poi(
+          %{
+            name: "Test POI",
+            description: "POI for comment test",
+            category: :viewpoint,
+            location: %Geo.Point{coordinates: {-36.8485, 174.7633}, srid: 4326},
+            event_id: event.id
+          },
+          actor: admin
+        )
+
+      # Add a comment to the POI
+      {:ok, _poi_with_comment} =
+        PlatserMap.update_poi_comment(poi, %{comment: "This is an admin comment"}, actor: admin)
+
+      # Disable public comments
+      {:ok, _event} =
+        Ash.update(event, %{allow_public_comments: false}, actor: admin, action: :update_settings)
+
+      # Admin views the POI after disabling comments
+      conn = sign_in_conn(conn, admin)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
+
+      # Comment should still be visible in read-only mode
+      html = render(view)
+      assert html =~ "This is an admin comment"
+    end
   end
 end

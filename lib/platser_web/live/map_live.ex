@@ -2444,6 +2444,15 @@ defmodule PlatserWeb.MapLive do
                     </p>
                     <p class="text-sm text-gray-600 leading-relaxed">{item.comment}</p>
                   </div>
+                <% else %>
+                  <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-amber-700 mb-1">
+                      Comments disabled
+                    </p>
+                    <p class="text-sm text-amber-600 leading-relaxed">
+                      Comments are currently disabled for this event. Only organizers can comment on map items.
+                    </p>
+                  </div>
                 <% end %>
               <% end %>
 

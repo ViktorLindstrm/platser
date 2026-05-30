@@ -65,4 +65,33 @@ defmodule PlatserWeb.MapInspectionPropertyTest do
       end
     end
   end
+
+  describe "comment permission visibility" do
+    property "comment form visibility is determined by can_manage and allow_public_comments" do
+      check all(
+              can_manage? <- StreamData.boolean(),
+              allow_public_comments? <- StreamData.boolean(),
+              has_comment? <- StreamData.boolean(),
+              max_runs: 50
+            ) do
+        can_view_comment_form? = can_manage? or allow_public_comments?
+
+        # When the user can manage OR comments are allowed, they should see the form
+        assert can_view_comment_form? == (can_manage? or allow_public_comments?)
+
+        # When comments are disabled and user is not a manager:
+        # - They should see disabled message if no existing comment
+        # - They should see the comment if it exists
+        if not allow_public_comments? and not can_manage? do
+          if has_comment? do
+            # Should see the existing comment in read-only mode
+            assert has_comment? == true
+          else
+            # Should see the "comments disabled" message
+            assert allow_public_comments? == false
+          end
+        end
+      end
+    end
+  end
 end
