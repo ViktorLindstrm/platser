@@ -18,9 +18,23 @@ defmodule PlatserWeb.Events.IndexLive do
     socket =
       socket
       |> assign(:page_title, "My Events")
+      |> assign(:join_code_valid, false)
       |> stream(:events, events)
 
     {:ok, socket}
+  end
+
+  @impl Phoenix.LiveView
+  def handle_event("validate_join_code", %{"code" => code}, socket) when is_binary(code) do
+    is_valid = String.length(code) == 6 && code =~ ~r/^[A-Za-z0-9]{6}$/
+    {:noreply, assign(socket, :join_code_valid, is_valid)}
+  end
+
+  @spec handle_event(String.t(), map(), Phoenix.LiveView.Socket.t()) ::
+          {:noreply, Phoenix.LiveView.Socket.t()}
+  def handle_event("join_by_code", %{"code" => code}, socket) when is_binary(code) do
+    code_upper = String.upcase(code)
+    {:noreply, push_navigate(socket, to: ~p"/join/#{code_upper}")}
   end
 
   @impl Phoenix.LiveView
@@ -43,6 +57,39 @@ defmodule PlatserWeb.Events.IndexLive do
           >
             <.icon name="hero-plus" class="w-4 h-4" /> New Event
           </.link>
+        </div>
+
+        <%!-- Join an event form --%>
+        <div class="bg-base-100 border border-base-200 rounded-2xl p-6">
+          <h2 class="font-semibold text-base-content mb-4">Join an Event</h2>
+          <p class="text-sm text-base-content/60 mb-4">
+            Have an invite code? Enter it here to join an event.
+          </p>
+          <form phx-submit="join_by_code" class="flex flex-col sm:flex-row gap-2">
+            <input
+              type="text"
+              name="code"
+              maxlength="6"
+              placeholder="Enter code (e.g., AX7K2P)"
+              class="flex-1 px-4 py-3 rounded-xl border border-base-300 bg-base-100 text-base-content placeholder:text-base-content/40 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+              id="join-code-input"
+              phx-change="validate_join_code"
+            />
+            <button
+              type="submit"
+              id="join-code-btn"
+              disabled={@join_code_valid == false}
+              class={[
+                "px-6 py-3 rounded-xl font-medium transition-all whitespace-nowrap",
+                if(@join_code_valid == true,
+                  do: "bg-primary text-primary-content hover:brightness-110 active:scale-95",
+                  else: "bg-base-300 text-base-content/50 cursor-not-allowed"
+                )
+              ]}
+            >
+              Join
+            </button>
+          </form>
         </div>
 
         <%!-- Event list --%>

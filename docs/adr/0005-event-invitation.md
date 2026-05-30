@@ -15,6 +15,8 @@ Use **short alphanumeric join codes** to invite participants to events.
 - Generated at event creation using `:crypto.strong_rand_bytes/1` + Base32-like encoding,
   guaranteed unique via DB unique index.
 - A user who is logged in visits `/join/:code` and is immediately added as a `:member`.
+  - The join flow can be accessed directly via `/join/:code` URL.
+  - Users can also submit a join code via a form on the events index (`/events`) page.
 - The admin can **regenerate** the join code at any time to revoke future joins without
   removing existing members.
 - The join page shows event name and date before confirming, so the user knows what they're
