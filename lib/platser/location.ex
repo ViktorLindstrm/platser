@@ -99,7 +99,7 @@ defmodule Platser.Location do
   def geofences_containing(event_id, lat, lng) do
     Repo.all(
       from g in "geofences",
-        where: g.event_id == ^event_id,
+        where: g.event_id == type(^event_id, :binary_id),
         where: g.visibility == "public",
         where:
           fragment(

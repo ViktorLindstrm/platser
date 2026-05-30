@@ -3,6 +3,7 @@ defmodule PlatserWeb.Dev.SimulatorLive do
 
   alias Platser.Accounts.User
   alias Platser.Dev.GpsSimulator
+  alias Platser.Events.Event
 
   @pmtiles_url Application.compile_env(
                  :platser,
@@ -17,6 +18,7 @@ defmodule PlatserWeb.Dev.SimulatorLive do
     if connected?(socket), do: Phoenix.PubSub.subscribe(Platser.PubSub, GpsSimulator.topic())
 
     state = GpsSimulator.get_state()
+    events = load_events()
 
     socket =
       socket
@@ -24,6 +26,7 @@ defmodule PlatserWeb.Dev.SimulatorLive do
       |> assign(:simulator, state)
       |> assign(:patterns, @patterns)
       |> assign(:pmtiles_url, @pmtiles_url)
+      |> assign(:events, events)
       |> assign(
         :form,
         to_form(%{"email" => "", "display_name" => "", "pattern" => "stationary"}, as: :simulator)
@@ -59,6 +62,14 @@ defmodule PlatserWeb.Dev.SimulatorLive do
       GpsSimulator.start_simulation()
       {:noreply, assign(socket, simulator: %{socket.assigns.simulator | running?: true})}
     end
+  end
+
+  @impl true
+  def handle_event("set_event", %{"event_id" => event_id}, socket) do
+    event_id = if event_id == "", do: nil, else: event_id
+    GpsSimulator.set_event(event_id)
+    state = GpsSimulator.get_state()
+    {:noreply, assign(socket, simulator: state)}
   end
 
   @impl true
@@ -133,9 +144,27 @@ defmodule PlatserWeb.Dev.SimulatorLive do
         </div>
 
         <div class="bg-base-100 border border-base-200 rounded-2xl p-5 shadow-sm">
-          <div class="flex items-center justify-between gap-3">
+          <div class="flex items-center justify-between gap-3 flex-wrap">
             <h2 class="font-semibold text-base-content">Map</h2>
-            <span class="text-sm text-base-content/50">event: {@simulator.event_id || "none"}</span>
+            <form phx-submit="set_event" id="set-event-form" class="flex items-center gap-2">
+              <label class="text-sm text-base-content/50 shrink-0">Event:</label>
+              <select
+                id="set-event-select"
+                name="event_id"
+                class="text-sm px-2 py-1 rounded-lg border border-base-300 bg-base-100 text-base-content"
+              >
+                <option value="">— none —</option>
+                <%= for {name, id} <- @events do %>
+                  <option value={id} selected={id == @simulator.event_id}>{name}</option>
+                <% end %>
+              </select>
+              <button
+                type="submit"
+                class="text-sm px-3 py-1 rounded-lg bg-primary text-primary-content font-medium hover:brightness-110 transition-all"
+              >
+                Set
+              </button>
+            </form>
           </div>
 
           <div
@@ -241,6 +270,15 @@ defmodule PlatserWeb.Dev.SimulatorLive do
       </div>
     </Layouts.app>
     """
+  end
+
+  defp load_events do
+    Event
+    |> Ash.Query.select([:id, :name])
+    |> Ash.read!(authorize?: false)
+    |> Enum.map(&{&1.name, &1.id})
+  rescue
+    _ -> []
   end
 
   defp create_simulated_user(params) do
