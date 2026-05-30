@@ -18,7 +18,8 @@ defmodule Platser.ActivityFeedPropertyTest do
     :joined_event,
     :comment_added,
     :entered_geofence,
-    :exited_geofence
+    :exited_geofence,
+    :checked_in
   ]
 
   defp valid_action_gen do
@@ -71,14 +72,14 @@ defmodule Platser.ActivityFeedPropertyTest do
     {user, event}
   end
 
-  defp insert_entry(user, event, action \\ :poi_published) do
+  defp insert_entry(user, event, action \\ :poi_published, subject_id \\ Ecto.UUID.generate()) do
     n = System.unique_integer([:positive])
 
     Activity.create_entry(
       %{
         action: action,
         subject_type: "poi",
-        subject_id: Ecto.UUID.generate(),
+        subject_id: subject_id,
         message: "Test entry #{n}",
         event_id: event.id
       },
@@ -111,6 +112,57 @@ defmodule Platser.ActivityFeedPropertyTest do
                  DateTime.compare(newer.inserted_at, older.inserted_at) in [:gt, :eq]
                end),
                "Entries not in newest-first order: #{inspect(Enum.map(fetched, & &1.inserted_at))}"
+      end
+    end
+  end
+
+  describe "subject filtering" do
+    property "list_entries_for_subject returns only entries for the requested subject" do
+      check all(
+              subject_entry_count <- StreamData.integer(1..8),
+              other_entry_count <- StreamData.integer(1..8),
+              max_runs: 20
+            ) do
+        {user, event} = create_event_with_member()
+        subject_id = Ecto.UUID.generate()
+
+        Enum.each(1..subject_entry_count, fn _ ->
+          {:ok, _} = insert_entry(user, event, :poi_published, subject_id)
+        end)
+
+        Enum.each(1..other_entry_count, fn _ ->
+          {:ok, _} = insert_entry(user, event, :comment_added, Ecto.UUID.generate())
+        end)
+
+        {:ok, fetched} = Activity.list_entries_for_subject(subject_id, actor: user)
+
+        assert length(fetched) == subject_entry_count
+        assert Enum.all?(fetched, &(&1.subject_id == subject_id))
+      end
+    end
+  end
+
+  describe "activity filtering" do
+    property "checked-in filter only returns checked-in entries" do
+      check all(
+              checked_in_count <- StreamData.integer(1..8),
+              other_count <- StreamData.integer(1..8),
+              max_runs: 20
+            ) do
+        {user, event} = create_event_with_member()
+
+        Enum.each(1..checked_in_count, fn _ ->
+          {:ok, _} = insert_entry(user, event, :checked_in)
+        end)
+
+        Enum.each(1..other_count, fn _ ->
+          {:ok, _} = insert_entry(user, event, :poi_published)
+        end)
+
+        {:ok, fetched} = Activity.list_entries_for_event_with_filter(event.id, user, :check_ins)
+
+        assert fetched != []
+        assert Enum.all?(fetched, &(&1.action == :checked_in))
       end
     end
   end

@@ -5,6 +5,10 @@ defmodule Platser.Map.Geofence do
     data_layer: AshPostgres.DataLayer,
     authorizers: [Ash.Policy.Authorizer]
 
+  import Ecto.Query
+
+  alias Platser.Repo
+
   postgres do
     table "geofences"
     repo(Platser.Repo)
@@ -21,7 +25,18 @@ defmodule Platser.Map.Geofence do
     create :create do
       primary? true
       accept [:name, :description, :comment, :purpose, :geometry, :color, :event_id]
-      change set_attribute(:visibility, :private)
+
+      change fn changeset, context ->
+        if boundary_purpose?(changeset) do
+          changeset
+          |> Ash.Changeset.force_change_attribute(:visibility, :public)
+          |> Ash.Changeset.force_change_attribute(:published_at, DateTime.utc_now())
+          |> Platser.Map.Changes.BroadcastGeofencePublish.change([], context)
+        else
+          Ash.Changeset.force_change_attribute(changeset, :visibility, :private)
+        end
+      end
+
       change relate_actor(:creator)
 
       validate fn changeset, _ ->
@@ -30,6 +45,10 @@ defmodule Platser.Map.Geofence do
 
       validate fn changeset, _ ->
         validate_color(Ash.Changeset.get_attribute(changeset, :color))
+      end
+
+      validate fn changeset, _ ->
+        validate_boundary_uniqueness(changeset)
       end
     end
 
@@ -61,6 +80,10 @@ defmodule Platser.Map.Geofence do
       validate fn changeset, _ ->
         validate_color(Ash.Changeset.get_attribute(changeset, :color))
       end
+
+      validate fn changeset, _ ->
+        validate_boundary_uniqueness(changeset)
+      end
     end
 
     update :update_metadata do
@@ -75,6 +98,8 @@ defmodule Platser.Map.Geofence do
     update :update_comment do
       accept [:comment]
       require_atomic? false
+
+      change Platser.Map.Changes.BroadcastCommentUpdate
     end
 
     destroy :destroy do
@@ -188,4 +213,46 @@ defmodule Platser.Map.Geofence do
 
   defp validate_color(_),
     do: {:error, field: :color, message: "must be a valid hex color (e.g. #ff0000)"}
+
+  @spec validate_boundary_uniqueness(term()) :: :ok | {:error, keyword()}
+  defp validate_boundary_uniqueness(changeset) do
+    purpose = Ash.Changeset.get_attribute(changeset, :purpose)
+
+    if purpose == :boundary and boundary_geofence_exists?(changeset) do
+      {:error, field: :purpose, message: "only one boundary geofence is allowed per event"}
+    else
+      :ok
+    end
+  end
+
+  @spec boundary_geofence_exists?(term()) :: boolean()
+  defp boundary_geofence_exists?(changeset) do
+    event_id = Ash.Changeset.get_attribute(changeset, :event_id)
+    geofence_id = Ash.Changeset.get_attribute(changeset, :id)
+
+    if is_nil(event_id) do
+      false
+    else
+      query =
+        from g in "geofences",
+          where: g.event_id == type(^event_id, :binary_id),
+          where: g.purpose == "boundary",
+          select: g.id
+
+      query =
+        if is_nil(geofence_id) do
+          query
+        else
+          from g in query,
+            where: g.id != type(^geofence_id, :binary_id)
+        end
+
+      Repo.aggregate(query, :count, :id) > 0
+    end
+  end
+
+  @spec boundary_purpose?(term()) :: boolean()
+  defp boundary_purpose?(changeset) do
+    Ash.Changeset.get_attribute(changeset, :purpose) == :boundary
+  end
 end

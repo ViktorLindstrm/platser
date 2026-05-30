@@ -97,7 +97,7 @@ defmodule Platser.PoiMetadataEditPropertyTest do
       PlatserMap.create_geofence(
         %{
           name: "Original Geofence",
-          purpose: :boundary,
+          purpose: :meeting_zone,
           color: "#3B82F6",
           geometry: polygon,
           event_id: event.id
@@ -141,7 +141,7 @@ defmodule Platser.PoiMetadataEditPropertyTest do
 
         assert {:ok, updated} = result
         assert updated.name == new_name
-        assert updated.description == new_desc
+        assert updated.description == if(new_desc == "", do: nil, else: new_desc)
         assert updated.visibility == :public
       end
     end

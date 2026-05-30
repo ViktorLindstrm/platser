@@ -3,6 +3,7 @@ defmodule PlatserWeb.MapLiveTest do
 
   import Phoenix.LiveViewTest
 
+  alias Platser.Activity
   alias Platser.Map, as: PlatserMap
   alias Platser.Media
 
@@ -121,6 +122,23 @@ defmodule PlatserWeb.MapLiveTest do
     attachment
   end
 
+  defp insert_activity_entry(user, event, action, subject_id) do
+    {:ok, entry} =
+      Activity.create_entry(
+        %{
+          action: action,
+          subject_type: "poi",
+          subject_id: subject_id,
+          message: "Seeded #{action}",
+          event_id: event.id
+        },
+        actor: user,
+        authorize?: false
+      )
+
+    entry
+  end
+
   test "opens a POI inspection drawer and supports publish", %{conn: conn} do
     user = create_user("poi")
     event = create_event(user)
@@ -160,7 +178,8 @@ defmodule PlatserWeb.MapLiveTest do
     assert has_element?(view, "#map-item-status-badge")
     assert has_element?(view, "#map-item-focus-btn")
     assert has_element?(view, "#map-item-edit-btn")
-    assert has_element?(view, "#map-item-publish-btn")
+    assert has_element?(view, "#map-item-fit-boundary-btn")
+    refute has_element?(view, "#map-item-publish-btn")
     assert has_element?(view, "#map-item-delete-btn")
 
     render_click(element(view, "#map-item-delete-btn"))
@@ -184,6 +203,7 @@ defmodule PlatserWeb.MapLiveTest do
     refute has_element?(view, "#map-item-drawer")
     assert has_element?(view, "#poi-form")
     assert has_element?(view, "#poi-name")
+    assert has_element?(view, "#poi-color")
   end
 
   test "submitting POI edit form updates the POI", %{conn: conn} do
@@ -198,12 +218,18 @@ defmodule PlatserWeb.MapLiveTest do
     render_click(element(view, "#map-item-edit-btn"))
 
     render_submit(element(view, "#poi-form"), %{
-      "poi" => %{"name" => "Updated POI Name", "description" => "", "category" => "viewpoint"},
+      "poi" => %{
+        "name" => "Updated POI Name",
+        "description" => "",
+        "category" => "viewpoint",
+        "color" => "#10B981"
+      },
       "publish" => "false"
     })
 
     updated = PlatserMap.get_poi!(poi.id, actor: user)
     assert updated.name == "Updated POI Name"
+    assert updated.color == "#10B981"
     assert updated.visibility == :private
   end
 
@@ -247,7 +273,7 @@ defmodule PlatserWeb.MapLiveTest do
 
     updated = PlatserMap.get_geofence!(geofence.id, actor: user)
     assert updated.name == "Updated Geofence"
-    assert updated.visibility == :private
+    assert updated.visibility == :public
   end
 
   test "edit button shown for published POI (no publish button)", %{conn: conn} do
@@ -267,7 +293,7 @@ defmodule PlatserWeb.MapLiveTest do
     assert has_element?(view, "#map-item-delete-btn")
   end
 
-  test "editing a published POI shows only name/description fields", %{conn: conn} do
+  test "editing a published POI shows the color picker", %{conn: conn} do
     user = create_user("edit_published_poi_form")
     event = create_event(user)
     poi = create_poi(user, event)
@@ -282,6 +308,8 @@ defmodule PlatserWeb.MapLiveTest do
     assert has_element?(view, "#poi-form")
     assert has_element?(view, "#poi-name")
     assert has_element?(view, "#poi-description")
+    assert has_element?(view, "#poi-color")
+    refute has_element?(view, "#poi-category")
     refute has_element?(view, "#map-item-publish-btn")
   end
 
@@ -371,16 +399,40 @@ defmodule PlatserWeb.MapLiveTest do
 
     render_hook(view, "finish_drawing", %{})
 
+    refute has_element?(view, "#geofence-publish-btn")
+
     render_submit(element(view, "#geofence-form"), %{
       "geofence" => %{
         "name" => "My Draft Geofence",
         "purpose" => "boundary",
         "color" => "#3B82F6"
-      },
-      "publish" => "false"
+      }
     })
 
     assert has_element?(view, "#map-item-drawer")
+    refute has_element?(view, "#map-item-publish-btn")
+    assert has_element?(view, "#map-item-fit-boundary-btn")
+  end
+
+  test "shows the in-event-area chip when the shared position is inside the boundary", %{
+    conn: conn
+  } do
+    user = create_user("boundary_chip")
+    event = create_event(user)
+    _geofence = create_geofence(user, event)
+    conn = sign_in_conn(conn, user)
+
+    {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+    render_click(element(view, "#share-location-btn"))
+
+    render_hook(view, "location_update", %{"lat" => -36.845, "lng" => 174.765})
+
+    assert has_element?(view, "#event-boundary-chip")
+
+    render_hook(view, "location_update", %{"lat" => -36.835, "lng" => 174.765})
+
+    refute has_element?(view, "#event-boundary-chip")
   end
 
   test "photo carousel is shown in inspection drawer when POI has attachments", %{conn: conn} do
@@ -396,6 +448,71 @@ defmodule PlatserWeb.MapLiveTest do
 
     assert has_element?(view, "#map-item-carousel")
     assert has_element?(view, "#photo-#{attachment.id}")
+  end
+
+  test "filter chips reset the activity feed stream", %{conn: conn} do
+    user = create_user("activity_filters")
+    event = create_event(user)
+    poi = create_poi(user, event)
+    _check_in = insert_activity_entry(user, event, :checked_in, Ecto.UUID.generate())
+    _comment = insert_activity_entry(user, event, :comment_added, poi.id)
+    _published = insert_activity_entry(user, event, :poi_published, poi.id)
+    conn = sign_in_conn(conn, user)
+
+    {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+    render_click(element(view, "#feed-toggle-desktop"))
+
+    assert has_element?(view, "#activity-filter-comments")
+
+    render_click(element(view, "#activity-filter-comments"))
+
+    assert has_element?(view, ~s(#activity-entries [data-action="comment_added"]))
+    refute has_element?(view, ~s(#activity-entries [data-action="checked_in"]))
+    refute has_element?(view, ~s(#activity-entries [data-action="poi_published"]))
+
+    render_click(element(view, "#activity-filter-check-ins"))
+
+    assert has_element?(view, ~s(#activity-entries [data-action="checked_in"]))
+    refute has_element?(view, ~s(#activity-entries [data-action="comment_added"]))
+  end
+
+  test "inspection drawer shows per-item activity and refreshes on comment updates", %{conn: conn} do
+    user = create_user("inspection_activity")
+    event = create_event(user)
+    poi = create_poi(user, event)
+    {:ok, commented} = PlatserMap.update_poi_comment(poi, %{comment: "Pinned note"}, actor: user)
+    conn = sign_in_conn(conn, user)
+
+    {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+    render_hook(view, "inspect_map_object", %{kind: "poi", id: commented.id})
+
+    assert has_element?(view, "#map-item-activity")
+    assert has_element?(view, "#map-item-comment-quote")
+
+    assert has_element?(
+             view,
+             ~s(#selected-map-object-activity-entries [data-action="comment_added"])
+           )
+
+    refute has_element?(
+             view,
+             ~s(#selected-map-object-activity-entries [data-action="poi_published"])
+           )
+
+    {:ok, published} = PlatserMap.publish_poi(commented, actor: user)
+    _ = render(view)
+
+    assert has_element?(view, "#map-item-drawer")
+
+    assert has_element?(
+             view,
+             ~s(#selected-map-object-activity-entries [data-action="poi_published"])
+           )
+
+    refute has_element?(view, "#map-item-publish-btn")
+    assert published.visibility == :public
   end
 
   test "photo carousel is not shown in inspection drawer when POI has no attachments", %{

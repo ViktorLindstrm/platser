@@ -93,32 +93,33 @@ defmodule Platser.Location do
 
   @doc """
   Returns IDs of public geofences whose geometry contains the given point.
-  Uses PostGIS `ST_Within` (boundary-exclusive).
+  Uses PostGIS `ST_Within` for regular geofences and includes the event
+  boundary with `ST_Covers` so edge points count as inside.
   """
   @spec geofences_containing(String.t(), float(), float()) :: [String.t()]
   def geofences_containing(event_id, lat, lng) do
-    Repo.all(
-      from g in "geofences",
-        where: g.event_id == type(^event_id, :binary_id),
-        where: g.visibility == "public",
-        where:
-          fragment(
-            "ST_Within(ST_SetSRID(ST_MakePoint(?, ?), 4326), ?)",
-            type(^lng, :float),
-            type(^lat, :float),
-            g.geometry
-          ),
-        select: type(g.id, :binary_id)
-    )
+    regular_ids = regular_geofences_containing(event_id, lat, lng)
+    boundary_id = boundary_geofence_id(event_id, lat, lng)
+    boundary_ids = if is_nil(boundary_id), do: nil, else: boundary_id
+
+    regular_ids
+    |> append_boundary_id(boundary_ids)
+    |> Enum.uniq()
   rescue
-    error in [Postgrex.Error] ->
-      require Logger
+    _error in [Postgrex.Error] ->
+      manual_geofences_containing(event_id, lat, lng)
+  end
 
-      Logger.warning(
-        "Geofence lookup skipped because PostGIS is unavailable: #{Exception.message(error)}"
-      )
-
-      []
+  @doc """
+  Returns true when the coordinate lies inside the event boundary geofence.
+  Boundary edges count as inside.
+  """
+  @spec in_event_boundary?(String.t(), %{lat: float(), lng: float()}) :: boolean()
+  def in_event_boundary?(event_id, %{lat: lat, lng: lng}) do
+    boundary_geofence_id(event_id, lat, lng) != nil
+  rescue
+    _error in [Postgrex.Error] ->
+      manual_boundary_geofence_id(event_id, lat, lng) != nil
   end
 
   # ---------------------------------------------------------------------------
@@ -136,6 +137,140 @@ defmodule Platser.Location do
     end
   end
 
+  @spec regular_geofences_containing(String.t(), float(), float()) :: [String.t()]
+  defp regular_geofences_containing(event_id, lat, lng) do
+    Repo.all(
+      from g in "geofences",
+        where: g.event_id == type(^event_id, :binary_id),
+        where: g.visibility == "public",
+        where:
+          fragment(
+            "ST_Within(ST_SetSRID(ST_MakePoint(?, ?), 4326), ?)",
+            type(^lng, :float),
+            type(^lat, :float),
+            g.geometry
+          ),
+        select: type(g.id, :binary_id)
+    )
+  end
+
+  @spec boundary_geofence_id(String.t(), float(), float()) :: String.t() | nil
+  defp boundary_geofence_id(event_id, lat, lng) do
+    Repo.one(
+      from g in "geofences",
+        where: g.event_id == type(^event_id, :binary_id),
+        where: g.visibility == "public",
+        where: g.purpose == "boundary",
+        where:
+          fragment(
+            "ST_Covers(?, ST_SetSRID(ST_MakePoint(?, ?), 4326))",
+            g.geometry,
+            type(^lng, :float),
+            type(^lat, :float)
+          ),
+        select: type(g.id, :binary_id)
+    )
+  end
+
+  @spec append_boundary_id([String.t()], String.t() | nil) :: [String.t()]
+  defp append_boundary_id(ids, nil), do: ids
+  defp append_boundary_id(ids, boundary_id), do: [boundary_id | ids]
+
+  @spec manual_geofences_containing(String.t(), float(), float()) :: [String.t()]
+  defp manual_geofences_containing(event_id, lat, lng) do
+    Repo.all(
+      from g in "geofences",
+        where: g.event_id == type(^event_id, :binary_id),
+        where: g.visibility == "public",
+        select: %{id: type(g.id, :binary_id), geometry: g.geometry, purpose: g.purpose}
+    )
+    |> Enum.flat_map(fn %{id: id, geometry: geometry, purpose: purpose} ->
+      inclusive? = purpose == "boundary"
+
+      if geometry_contains_point?(geometry, lat, lng, inclusive?) do
+        [id]
+      else
+        []
+      end
+    end)
+  end
+
+  @spec manual_boundary_geofence_id(String.t(), float(), float()) :: String.t() | nil
+  defp manual_boundary_geofence_id(event_id, lat, lng) do
+    Repo.one(
+      from g in "geofences",
+        where: g.event_id == type(^event_id, :binary_id),
+        where: g.visibility == "public",
+        where: g.purpose == "boundary",
+        select: %{id: type(g.id, :binary_id), geometry: g.geometry}
+    )
+    |> case do
+      nil ->
+        nil
+
+      %{id: id, geometry: geometry} ->
+        if geometry_contains_point?(geometry, lat, lng, true), do: id, else: nil
+
+      _ ->
+        nil
+    end
+  end
+
+  @spec geometry_contains_point?(term(), float(), float(), boolean()) :: boolean()
+  defp geometry_contains_point?(geometry, lat, lng, inclusive?) do
+    with {:ok, %Geo.Polygon{coordinates: [ring | _]}} <- normalize_polygon(geometry) do
+      ring_contains_point?(ring, lng, lat, inclusive?)
+    else
+      _ -> false
+    end
+  end
+
+  @spec normalize_polygon(term()) :: {:ok, Geo.Polygon.t()} | :error
+  defp normalize_polygon(%Geo.Polygon{} = polygon), do: {:ok, polygon}
+
+  defp normalize_polygon(geometry) when is_map(geometry) do
+    case Geo.JSON.decode(geometry) do
+      {:ok, %Geo.Polygon{} = polygon} -> {:ok, polygon}
+      _ -> :error
+    end
+  end
+
+  defp normalize_polygon(_), do: :error
+
+  @spec ring_contains_point?([{float(), float()}], float(), float(), boolean()) :: boolean()
+  defp ring_contains_point?(ring, x, y, inclusive?) when length(ring) >= 3 do
+    segments = Enum.zip(ring, tl(ring) ++ [hd(ring)])
+
+    Enum.reduce_while(segments, false, fn {start, finish}, inside ->
+      if point_on_segment?({x, y}, start, finish) do
+        if inclusive?, do: {:halt, true}, else: {:halt, false}
+      else
+        {x1, y1} = start
+        {x2, y2} = finish
+
+        intersects? =
+          y1 > y != y2 > y and
+            x < x1 + (x2 - x1) * (y - y1) / (y2 - y1)
+
+        {:cont, if(intersects?, do: !inside, else: inside)}
+      end
+    end)
+  end
+
+  defp ring_contains_point?(_ring, _x, _y, _inclusive?), do: false
+
+  @spec point_on_segment?({float(), float()}, {float(), float()}, {float(), float()}) ::
+          boolean()
+  defp point_on_segment?({x, y}, {x1, y1}, {x2, y2}) do
+    cross = (y - y1) * (x2 - x1) - (x - x1) * (y2 - y1)
+
+    abs(cross) <= 1.0e-9 and
+      x >= min(x1, x2) - 1.0e-9 and
+      x <= max(x1, x2) + 1.0e-9 and
+      y >= min(y1, y2) - 1.0e-9 and
+      y <= max(y1, y2) + 1.0e-9
+  end
+
   @spec broadcast_geofence_transitions(
           [String.t()],
           [String.t()],
@@ -150,7 +285,7 @@ defmodule Platser.Location do
     geofence_names =
       Repo.all(
         from g in "geofences",
-          where: g.id in ^geofence_ids,
+          where: g.id in type(^geofence_ids, {:array, :binary_id}),
           select: {type(g.id, :binary_id), g.name}
       )
       |> Map.new()

@@ -19,10 +19,33 @@ defmodule Platser.Activity.Entry do
       prepare build(sort: [inserted_at: :desc], limit: 50)
     end
 
+    read :list_by_subject do
+      argument :subject_id, :uuid, allow_nil?: false
+      filter expr(subject_id == ^arg(:subject_id))
+      prepare build(sort: [inserted_at: :desc], limit: 20)
+    end
+
+    read :list_check_ins_by_event do
+      argument :event_id, :uuid, allow_nil?: false
+      filter expr(event_id == ^arg(:event_id) and action == :checked_in)
+      prepare build(sort: [inserted_at: :desc], limit: 20)
+    end
+
     create :create do
       primary? true
       accept [:action, :subject_type, :subject_id, :message, :event_id]
       change relate_actor(:actor)
+    end
+
+    create :check_in do
+      accept [:event_id, :lat, :lng, :message]
+
+      validate present([:lat, :lng])
+      validate numericality(:lat, greater_than_or_equal_to: -90.0, less_than_or_equal_to: 90.0)
+      validate numericality(:lng, greater_than_or_equal_to: -180.0, less_than_or_equal_to: 180.0)
+
+      change relate_actor(:actor)
+      change Platser.Activity.Entry.Changes.CheckIn
     end
   end
 
@@ -48,7 +71,8 @@ defmodule Platser.Activity.Entry do
                     :joined_event,
                     :comment_added,
                     :entered_geofence,
-                    :exited_geofence
+                    :exited_geofence,
+                    :checked_in
                   ]
     end
 
@@ -62,6 +86,14 @@ defmodule Platser.Activity.Entry do
 
     attribute :message, :string do
       allow_nil? false
+    end
+
+    attribute :lat, :float do
+      allow_nil? true
+    end
+
+    attribute :lng, :float do
+      allow_nil? true
     end
 
     create_timestamp :inserted_at

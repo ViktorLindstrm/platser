@@ -133,10 +133,12 @@ export default {
 
     // Live location sharing state
     this.memberMarkers = {}
+    this.checkInMarkers = {}
     this.watchId = null
     this.lastLat = null
     this.lastLng = null
     this.lastPushTime = 0
+    this.checkInPending = false
 
     this.map = new maplibregl.Map({
       container: this.el,
@@ -166,6 +168,13 @@ export default {
     }
     document.addEventListener("click", this._onSetBoundsClick)
 
+    this._onCheckInClick = e => {
+      if (e.target.closest("[data-check-in]")) {
+        this._requestCheckIn()
+      }
+    }
+    document.addEventListener("click", this._onCheckInClick)
+
     this.map.on("load", () => {
       this.mapReady = true
       this.pendingCallbacks.forEach(fn => fn())
@@ -185,7 +194,13 @@ export default {
         this.pushEvent("vertex_added", {vertices: this.drawVertices})
       } else {
         const features = this.map.queryRenderedFeatures(e.point, {
-          layers: ["poi-circles", "geofence-fills", "geofence-lines"],
+          layers: [
+            "poi-circles",
+            "geofence-boundary-fills",
+            "geofence-boundary-lines",
+            "geofence-fills",
+            "geofence-lines",
+          ],
         })
 
         const feature = features[0]
@@ -199,9 +214,12 @@ export default {
       }
     })
 
-    this.handleEvent("map_init", ({pois, geofences, bounds}) => {
+    this.handleEvent("map_init", ({pois, geofences, bounds, check_ins = []}) => {
       this.runWhenReady(() => {
         this._initSources(pois, geofences)
+        check_ins.forEach(checkIn => {
+          this._upsertCheckInMarker(checkIn.user_id, checkIn.lat, checkIn.lng)
+        })
         if (bounds) {
           this.map.fitBounds(
             [[bounds.west, bounds.south], [bounds.east, bounds.north]],
@@ -274,6 +292,10 @@ export default {
 
     this.handleEvent("geofence_removed", ({id}) => {
       this.runWhenReady(() => this._removeFeature("geofences", id))
+    })
+
+    this.handleEvent("check_in_added", ({user_id, lat, lng}) => {
+      this.runWhenReady(() => this._upsertCheckInMarker(user_id, lat, lng))
     })
 
     // Live location sharing events
@@ -352,7 +374,11 @@ export default {
 
   _setupHoverAffordance() {
     const canvas = this.map.getCanvas()
-    const interactiveLayers = ["poi-circles", "geofence-fills", "geofence-lines"]
+    const interactiveLayers = [
+      "poi-circles",
+      "geofence-fills",
+      "geofence-lines",
+    ]
 
     this.hoverPopup = new maplibregl.Popup({
       closeButton: false,
@@ -500,9 +526,34 @@ export default {
 
     if (!this.map.getLayer("geofence-fills")) {
       this.map.addLayer({
+        id: "geofence-boundary-fills",
+        type: "fill",
+        source: "geofences",
+        filter: ["==", ["get", "purpose"], "boundary"],
+        paint: {
+          "fill-color": ["coalesce", ["get", "color"], "#6366F1"],
+          "fill-opacity": 0.08,
+        },
+      })
+
+      this.map.addLayer({
+        id: "geofence-boundary-lines",
+        type: "line",
+        source: "geofences",
+        filter: ["==", ["get", "purpose"], "boundary"],
+        paint: {
+          "line-color": ["coalesce", ["get", "color"], "#6366F1"],
+          "line-width": 4,
+          "line-opacity": 0.9,
+          "line-dasharray": [2, 2],
+        },
+      })
+
+      this.map.addLayer({
         id: "geofence-fills",
         type: "fill",
         source: "geofences",
+        filter: ["!=", ["get", "purpose"], "boundary"],
         paint: {
           "fill-color": ["coalesce", ["get", "color"], "#6366F1"],
           "fill-opacity": 0.2,
@@ -515,6 +566,7 @@ export default {
         id: "geofence-lines",
         type: "line",
         source: "geofences",
+        filter: ["!=", ["get", "purpose"], "boundary"],
         paint: {
           "line-color": ["coalesce", ["get", "color"], "#6366F1"],
           "line-width": 2,
@@ -530,7 +582,7 @@ export default {
         source: "pois",
         paint: {
           "circle-radius": 9,
-          "circle-color": "#3B82F6",
+          "circle-color": ["coalesce", ["get", "color"], "#3B82F6"],
           "circle-stroke-width": 2,
           "circle-stroke-color": "#ffffff",
         },
@@ -554,6 +606,95 @@ export default {
     data.features = data.features.filter(f => f.id !== id)
     const source = this.map.getSource(sourceId)
     if (source) source.setData(data)
+  },
+
+  _requestCheckIn() {
+    if (!navigator.geolocation) {
+      this.pushEvent("check_in_error", {
+        message: "Your browser does not support location check-ins.",
+      })
+      return
+    }
+
+    if (this.checkInPending) return
+
+    this.checkInPending = true
+
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const {latitude: lat, longitude: lng} = pos.coords
+        this.checkInPending = false
+        this.pushEvent("check_in", {lat, lng})
+      },
+      error => {
+        this.checkInPending = false
+
+        const message =
+          error.code === 1
+            ? "Location permission denied. Check in could not be recorded."
+            : error.code === 2
+              ? "Your location could not be determined right now."
+              : error.code === 3
+                ? "Location lookup timed out."
+                : error.message || "Could not record check-in."
+
+        this.pushEvent("check_in_error", {message})
+      },
+      {enableHighAccuracy: true, maximumAge: 0, timeout: 10000},
+    )
+  },
+
+  _upsertCheckInMarker(userId, lat, lng) {
+    if (this.checkInMarkers[userId]) {
+      this.checkInMarkers[userId].setLngLat([lng, lat])
+      return
+    }
+
+    const el = document.createElement("div")
+    el.className = "check-in-marker"
+    el.style.cssText = [
+      "width:28px",
+      "height:28px",
+      "background:#F59E0B",
+      "border:3px solid white",
+      "border-radius:50% 50% 50% 0",
+      "box-shadow:0 2px 8px rgba(0,0,0,0.28)",
+      "display:flex",
+      "align-items:center",
+      "justify-content:center",
+      "transform:rotate(-45deg)",
+      "transform-origin:center center",
+      "color:white",
+      "font-size:14px",
+      "font-weight:800",
+      "user-select:none",
+      "cursor:default",
+    ].join(";")
+
+    const label = document.createElement("span")
+    label.textContent = "⚑"
+    label.style.transform = "rotate(45deg)"
+    el.appendChild(label)
+
+    const marker = new maplibregl.Marker({element: el})
+      .setLngLat([lng, lat])
+      .addTo(this.map)
+
+    this.checkInMarkers[userId] = marker
+  },
+
+  _removeCheckInMarker(userId) {
+    if (this.checkInMarkers[userId]) {
+      this.checkInMarkers[userId].remove()
+      delete this.checkInMarkers[userId]
+    }
+  },
+
+  _clearAllCheckInMarkers() {
+    Object.keys(this.checkInMarkers).forEach(userId => {
+      this.checkInMarkers[userId].remove()
+    })
+    this.checkInMarkers = {}
   },
 
   // ---------------------------------------------------------------------------
@@ -641,8 +782,12 @@ export default {
   destroyed() {
     this._stopGeolocation()
     this._clearAllMemberMarkers()
+    this._clearAllCheckInMarkers()
     if (this._onSetBoundsClick) {
       document.removeEventListener("click", this._onSetBoundsClick)
+    }
+    if (this._onCheckInClick) {
+      document.removeEventListener("click", this._onCheckInClick)
     }
     this.hoverPopup?.remove()
     this.map?.remove()

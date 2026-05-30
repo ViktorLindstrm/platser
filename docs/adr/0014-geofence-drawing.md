@@ -110,3 +110,17 @@ Geofences keep their existing unique fields (purpose radio group, colour picker)
 - Photo upload paths use the geofence ID as the subdirectory (same pattern as POI: `/uploads/<geofence_id>/<uuid>_filename`).
 - All changes are in incremental migration `priv/repo/migrations/20260529202707_task32_geofence_ux_parity.exs`.
 - Property tests in `test/platser/geofence_property_test.exs` extended to cover: description stored on create, comment persisted via `update_metadata`, attachment XOR-parent constraint, and geofence attachment list.
+
+## Amendment: Boundary geofences are always public
+
+**Status: Implemented**
+
+`purpose: :boundary` geofences are the special case for official event territory markers:
+
+- only one boundary geofence may exist per event
+- boundary geofences are auto-published on create
+- the map form suppresses publish/draft toggles for boundary geofences
+- the inspection drawer exposes a boundary-specific fit action
+- presence/location logic can treat the boundary as the authoritative "in event area" marker
+
+The higher-level lifecycle and UI details are documented in ADR-0018.

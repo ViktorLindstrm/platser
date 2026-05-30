@@ -143,3 +143,9 @@ Non-managers only see the comment if it is non-empty; if empty it is hidden enti
 ### Promoted Publish button
 
 The Publish button is now rendered in its own full-width row above the focus/edit/delete action bar, making it the primary CTA when a draft item is selected.
+
+## Amendment 3: Inspection activity stream (task #39)
+
+The inspection drawer now includes a per-item activity stream driven by `Activity.Entry` records
+filtered by subject id. The existing editable comment field remains above the activity section, and
+the current comment is also shown as a pinned quoted block at the top of the activity stream.

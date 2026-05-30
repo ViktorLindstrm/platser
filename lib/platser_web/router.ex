@@ -24,6 +24,7 @@ defmodule PlatserWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+    get "/join", PageController, :join_redirect
 
     sign_in_route register_path: "/register", reset_path: "/reset", auth_routes_prefix: "/auth"
     reset_route auth_routes_prefix: "/auth"

@@ -20,6 +20,8 @@ defmodule PlatserWeb.MapLive do
                )
 
   @poi_categories [:viewpoint, :camp, :hazard, :meeting_point, :food, :other]
+  @poi_default_color "#3B82F6"
+  @poi_color_options ["#3B82F6", "#10B981", "#EF4444", "#F59E0B", "#8B5CF6", "#EC4899"]
   @geofence_purposes [:boundary, :meeting_zone, :restricted, :camp_area, :other]
   @purpose_colors %{
     "boundary" => "#3B82F6",
@@ -46,6 +48,7 @@ defmodule PlatserWeb.MapLive do
   @type poi_step :: :idle | :picking | :editing
   @type geofence_step :: :idle | :drawing | :editing
   @type editing_published :: boolean()
+  @type activity_filter :: Activity.feed_filter()
   @type selected_map_object :: %{
           kind: MapInspection.kind(),
           item: Poi.t() | Geofence.t(),
@@ -68,8 +71,9 @@ defmodule PlatserWeb.MapLive do
     else
       case load_event(event_id, actor) do
         {:ok, event} ->
-          {pois, geofences, entries} = load_map_data(event_id, actor)
+          {pois, geofences, entries, check_ins} = load_map_data(event_id, actor, :all)
           is_admin = admin_member?(event_id, actor.id, actor)
+          current_location = Map.get(EventPresence.list_locations(event_id), actor.id)
 
           socket =
             socket
@@ -77,7 +81,10 @@ defmodule PlatserWeb.MapLive do
             |> assign(:is_admin, is_admin)
             |> assign(:pois, pois)
             |> assign(:geofences, geofences)
+            |> assign(:check_ins, check_ins)
+            |> assign(:activity_filter, :all)
             |> stream(:entries, entries)
+            |> stream(:selected_map_object_entries, [])
             |> assign(:unread_count, 0)
             |> assign(:drawer_open, false)
             |> assign(:pmtiles_url, @pmtiles_url)
@@ -86,8 +93,10 @@ defmodule PlatserWeb.MapLive do
             |> assign(:poi_name, "")
             |> assign(:poi_description, "")
             |> assign(:poi_category, "viewpoint")
+            |> assign(:poi_color, @poi_default_color)
             |> assign(:poi_errors, [])
             |> assign(:poi_categories, @poi_categories)
+            |> assign(:poi_color_options, @poi_color_options)
             |> assign(:geofence_step, :idle)
             |> assign(:geofence_vertices, [])
             |> assign(:geofence_geometry, nil)
@@ -104,6 +113,7 @@ defmodule PlatserWeb.MapLive do
             |> assign(:editing_poi_published, false)
             |> assign(:editing_geofence_id, nil)
             |> assign(:editing_geofence_published, false)
+            |> assign(:in_event_boundary?, presence_in_boundary?(current_location, geofences))
             |> allow_upload(:photos,
               accept: ~w(.jpg .jpeg .png .webp),
               max_entries: 5,
@@ -143,7 +153,8 @@ defmodule PlatserWeb.MapLive do
     map_payload = %{
       pois: to_geojson_feature_collection(socket.assigns.pois, &poi_to_feature/1),
       geofences: to_geojson_feature_collection(socket.assigns.geofences, &geofence_to_feature/1),
-      bounds: bounds_to_map(socket.assigns.event.bounds)
+      bounds: bounds_to_map(socket.assigns.event.bounds),
+      check_ins: Enum.map(socket.assigns.check_ins, &check_in_marker_payload/1)
     }
 
     member_locations =
@@ -171,11 +182,21 @@ defmodule PlatserWeb.MapLive do
   end
 
   def handle_info({:poi_added, poi}, socket) do
-    {:noreply, push_event(socket, "poi_added", poi_to_feature(poi))}
+    socket =
+      socket
+      |> maybe_refresh_selected_map_object(:poi, poi)
+      |> push_event("poi_added", poi_to_feature(poi))
+
+    {:noreply, socket}
   end
 
   def handle_info({:poi_updated, poi}, socket) do
-    {:noreply, push_event(socket, "poi_updated", poi_to_feature(poi))}
+    socket =
+      socket
+      |> maybe_refresh_selected_map_object(:poi, poi)
+      |> push_event("poi_updated", poi_to_feature(poi))
+
+    {:noreply, socket}
   end
 
   def handle_info({:poi_removed, poi_id}, socket) do
@@ -183,24 +204,43 @@ defmodule PlatserWeb.MapLive do
   end
 
   def handle_info({:geofence_added, geofence}, socket) do
-    {:noreply, push_event(socket, "geofence_added", geofence_to_feature(geofence))}
+    socket =
+      socket
+      |> assign(:geofences, upsert_geofence(socket.assigns.geofences, geofence))
+      |> maybe_refresh_selected_map_object(:geofence, geofence)
+      |> push_event("geofence_added", geofence_to_feature(geofence))
+
+    {:noreply, socket}
   end
 
   def handle_info({:geofence_updated, geofence}, socket) do
-    {:noreply, push_event(socket, "geofence_updated", geofence_to_feature(geofence))}
+    socket =
+      socket
+      |> assign(:geofences, upsert_geofence(socket.assigns.geofences, geofence))
+      |> maybe_refresh_selected_map_object(:geofence, geofence)
+      |> push_event("geofence_updated", geofence_to_feature(geofence))
+
+    {:noreply, socket}
   end
 
   def handle_info({:geofence_removed, geofence_id}, socket) do
-    {:noreply, push_event(socket, "geofence_removed", %{"id" => geofence_id})}
+    {:noreply,
+     socket
+     |> assign(:geofences, remove_geofence(socket.assigns.geofences, geofence_id))
+     |> push_event("geofence_removed", %{"id" => geofence_id})}
   end
 
   def handle_info({:entry_added, entry}, socket) do
-    {:noreply,
-     socket
-     |> stream_insert(:entries, entry, at: 0)
-     |> update(:unread_count, fn count ->
-       if socket.assigns.drawer_open, do: count, else: count + 1
-     end)}
+    socket =
+      socket
+      |> maybe_stream_activity_entry(entry)
+      |> maybe_stream_selected_map_object_entry(entry)
+      |> maybe_push_check_in_marker(entry)
+      |> update(:unread_count, fn count ->
+        if socket.assigns.drawer_open, do: count, else: count + 1
+      end)
+
+    {:noreply, socket}
   end
 
   def handle_info(
@@ -262,6 +302,25 @@ defmodule PlatserWeb.MapLive do
      |> assign(:unread_count, if(drawer_open, do: 0, else: socket.assigns.unread_count))}
   end
 
+  def handle_event("set_activity_filter", %{"filter" => filter}, socket) do
+    case parse_activity_filter(filter) do
+      nil ->
+        {:noreply, socket}
+
+      activity_filter ->
+        {pois, geofences, entries, check_ins} =
+          load_map_data(socket.assigns.event.id, socket.assigns.current_user, activity_filter)
+
+        {:noreply,
+         socket
+         |> assign(:activity_filter, activity_filter)
+         |> assign(:pois, pois)
+         |> assign(:geofences, geofences)
+         |> assign(:check_ins, check_ins)
+         |> stream(:entries, entries, reset: true)}
+    end
+  end
+
   def handle_event(
         "save_map_bounds",
         %{"west" => west, "south" => south, "east" => east, "north" => north},
@@ -297,6 +356,7 @@ defmodule PlatserWeb.MapLive do
        socket
        |> assign(:sharing?, false)
        |> assign(:location_tracked?, false)
+       |> assign(:in_event_boundary?, false)
        |> push_event("stop_sharing", %{})}
     else
       {:noreply,
@@ -304,6 +364,48 @@ defmodule PlatserWeb.MapLive do
        |> assign(:sharing?, true)
        |> push_event("start_sharing", %{})}
     end
+  end
+
+  def handle_event("check_in", %{"lat" => lat, "lng" => lng}, socket) do
+    actor = socket.assigns.current_user
+    event = socket.assigns.event
+    actor_name = actor.display_name || "Someone"
+    message = "#{actor_name} checked in"
+
+    case Activity.create_check_in(
+           %{
+             event_id: event.id,
+             lat: ensure_float(lat),
+             lng: ensure_float(lng),
+             message: message
+           },
+           actor: actor
+         ) do
+      {:ok, entry} ->
+        Phoenix.PubSub.broadcast(
+          Platser.PubSub,
+          "event:#{event.id}:activity",
+          {:entry_added, entry}
+        )
+
+        {:noreply, push_event(socket, "check_in_added", check_in_marker_payload(entry))}
+
+      {:error, %Ash.Error.Invalid{} = err} ->
+        message =
+          case format_ash_errors(err) do
+            [{_field, error_message} | _] -> error_message
+            _ -> "Could not record check-in."
+          end
+
+        {:noreply, put_flash(socket, :error, message)}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Could not record check-in.")}
+    end
+  end
+
+  def handle_event("check_in_error", %{"message" => message}, socket) do
+    {:noreply, put_flash(socket, :error, message)}
   end
 
   def handle_event(
@@ -324,8 +426,11 @@ defmodule PlatserWeb.MapLive do
       }
 
       case Location.update_presence(self(), event_id, user, location_params, already_tracked?) do
-        {:ok, _meta} ->
-          {:noreply, assign(socket, :location_tracked?, true)}
+        {:ok, meta} ->
+          {:noreply,
+           socket
+           |> assign(:location_tracked?, true)
+           |> assign(:in_event_boundary?, presence_in_boundary?(meta, socket.assigns.geofences))}
 
         {:error, :invalid_coords} ->
           {:noreply, socket}
@@ -345,6 +450,7 @@ defmodule PlatserWeb.MapLive do
       |> assign(:poi_name, "")
       |> assign(:poi_description, "")
       |> assign(:poi_category, "viewpoint")
+      |> assign(:poi_color, @poi_default_color)
       |> assign(:poi_errors, [])
       |> push_event("enable_location_pick", %{})
 
@@ -366,6 +472,11 @@ defmodule PlatserWeb.MapLive do
          |> assign(
            :selected_map_object_can_manage,
            can_manage_selected_map_object?(selected_map_object.item, actor)
+         )
+         |> stream(
+           :selected_map_object_entries,
+           load_selected_map_object_entries(selected_map_object.item, actor),
+           reset: true
          )}
 
       {:error, :not_found} ->
@@ -381,7 +492,8 @@ defmodule PlatserWeb.MapLive do
     {:noreply,
      socket
      |> assign(:selected_map_object, nil)
-     |> assign(:selected_map_object_can_manage, false)}
+     |> assign(:selected_map_object_can_manage, false)
+     |> stream(:selected_map_object_entries, [], reset: true)}
   end
 
   def handle_event("focus_selected_map_object", _params, socket) do
@@ -416,6 +528,7 @@ defmodule PlatserWeb.MapLive do
          |> assign(:poi_name, poi.name)
          |> assign(:poi_description, poi.description || "")
          |> assign(:poi_category, to_string(poi.category))
+         |> assign(:poi_color, poi.color || @poi_default_color)
          |> assign(:poi_errors, [])}
 
       %{kind: :geofence, item: %Geofence{} = geofence} ->
@@ -469,6 +582,13 @@ defmodule PlatserWeb.MapLive do
     socket =
       if Map.has_key?(params, "category") do
         assign(socket, :poi_category, params["category"])
+      else
+        socket
+      end
+
+    socket =
+      if Map.has_key?(params, "color") do
+        assign(socket, :poi_color, params["color"])
       else
         socket
       end
@@ -687,7 +807,11 @@ defmodule PlatserWeb.MapLive do
       if name == "" do
         {:noreply, assign(socket, :poi_errors, [{"name", "can't be blank"}])}
       else
-        poi_attrs = %{name: name, description: params["description"]}
+        poi_attrs = %{
+          name: name,
+          description: params["description"],
+          color: Map.get(params, "color", socket.assigns.poi_color)
+        }
 
         case socket.assigns.editing_poi_id do
           nil -> {:noreply, socket}
@@ -705,7 +829,8 @@ defmodule PlatserWeb.MapLive do
           name: String.trim(params["name"]),
           description: params["description"],
           category: String.to_existing_atom(params["category"]),
-          location: location
+          location: location,
+          color: Map.get(params, "color", socket.assigns.poi_color)
         }
 
         case socket.assigns.editing_poi_id do
@@ -980,6 +1105,7 @@ defmodule PlatserWeb.MapLive do
     |> assign(:poi_name, "")
     |> assign(:poi_description, "")
     |> assign(:poi_category, "viewpoint")
+    |> assign(:poi_color, @poi_default_color)
     |> assign(:poi_errors, [])
     |> assign(:editing_poi_id, nil)
     |> assign(:editing_poi_published, false)
@@ -1042,6 +1168,22 @@ defmodule PlatserWeb.MapLive do
   end
 
   defp load_selected_map_object(_, _, _), do: {:error, :not_found}
+
+  @spec load_selected_map_object_entries(Poi.t(), Platser.Accounts.User.t()) :: [Entry.t()]
+  defp load_selected_map_object_entries(%Poi{} = poi, actor) do
+    case Activity.list_entries_for_subject(poi.id, actor: actor) do
+      {:ok, entries} -> entries
+      {:error, _} -> []
+    end
+  end
+
+  @spec load_selected_map_object_entries(Geofence.t(), Platser.Accounts.User.t()) :: [Entry.t()]
+  defp load_selected_map_object_entries(%Geofence{} = geofence, actor) do
+    case Activity.list_entries_for_subject(geofence.id, actor: actor) do
+      {:ok, entries} -> entries
+      {:error, _} -> []
+    end
+  end
 
   @spec load_poi_attachments(Ecto.UUID.t(), Platser.Accounts.User.t()) :: [Attachment.t()]
   defp load_poi_attachments(poi_id, actor) do
@@ -1116,10 +1258,12 @@ defmodule PlatserWeb.MapLive do
     actor = socket.assigns.current_user
     poi = load_item_creator(poi, actor)
     attachments = load_poi_attachments(poi.id, actor)
+    entries = load_selected_map_object_entries(poi, actor)
 
     socket
     |> assign(:selected_map_object, %{kind: :poi, item: poi, attachments: attachments})
     |> assign(:selected_map_object_can_manage, can_manage_selected_map_object?(poi, actor))
+    |> stream(:selected_map_object_entries, entries, reset: true)
   end
 
   @spec select_map_object(
@@ -1131,10 +1275,12 @@ defmodule PlatserWeb.MapLive do
     actor = socket.assigns.current_user
     geofence = load_item_creator(geofence, actor)
     attachments = load_geofence_attachments(geofence.id, actor)
+    entries = load_selected_map_object_entries(geofence, actor)
 
     socket
     |> assign(:selected_map_object, %{kind: :geofence, item: geofence, attachments: attachments})
     |> assign(:selected_map_object_can_manage, can_manage_selected_map_object?(geofence, actor))
+    |> stream(:selected_map_object_entries, entries, reset: true)
   end
 
   @spec can_manage_selected_map_object?(Poi.t() | Geofence.t(), Platser.Accounts.User.t() | nil) ::
@@ -1174,6 +1320,8 @@ defmodule PlatserWeb.MapLive do
   defp submit_geofence(params, publish?, socket) do
     actor = socket.assigns.current_user
     event = socket.assigns.event
+    purpose = params["purpose"] || socket.assigns.geofence_purpose
+    boundary? = purpose == "boundary"
 
     if socket.assigns.editing_geofence_published do
       name = String.trim(params["name"] || "")
@@ -1204,7 +1352,7 @@ defmodule PlatserWeb.MapLive do
             geofence_params = %{
               name: String.trim(params["name"]),
               description: params["description"],
-              purpose: String.to_existing_atom(params["purpose"]),
+              purpose: String.to_existing_atom(purpose),
               color: params["color"],
               geometry: geometry,
               event_id: event.id
@@ -1216,11 +1364,11 @@ defmodule PlatserWeb.MapLive do
             geofence_attrs = %{
               name: String.trim(params["name"]),
               description: params["description"],
-              purpose: String.to_existing_atom(params["purpose"]),
+              purpose: String.to_existing_atom(purpose),
               color: params["color"]
             }
 
-            do_update_geofence(geofence_id, geofence_attrs, publish?, socket, actor)
+            do_update_geofence(geofence_id, geofence_attrs, publish? or boundary?, socket, actor)
         end
       end
     end
@@ -1238,30 +1386,45 @@ defmodule PlatserWeb.MapLive do
         _uploaded_paths = handle_photo_uploads_for_geofence(socket, geofence, actor)
 
         socket =
-          if publish? do
-            case PlatserMap.publish_geofence(geofence, actor: actor) do
-              {:ok, published} ->
-                socket
-                |> reset_geofence_form()
-                |> select_map_object(:geofence, published)
-                |> push_event("geofence_added", geofence_to_feature(published))
-                |> put_flash(:info, "Geofence published! Everyone can see it.")
-
-              {:error, %Ash.Error.Invalid{} = err} ->
-                msg = Ash.Error.to_error_class(err).message || "Could not publish geofence"
-                socket |> reset_geofence_form() |> put_flash(:error, msg)
-
-              {:error, _} ->
-                socket
-                |> reset_geofence_form()
-                |> put_flash(:error, "Could not publish geofence")
-            end
-          else
+          if geofence.visibility == :public do
             socket
             |> reset_geofence_form()
             |> select_map_object(:geofence, geofence)
             |> push_event("geofence_added", geofence_to_feature(geofence))
-            |> put_flash(:info, "Geofence saved as draft. Only you can see it.")
+            |> put_flash(
+              :info,
+              if geofence.purpose == :boundary do
+                "Boundary geofence published. Everyone can see it."
+              else
+                "Geofence published! Everyone can see it."
+              end
+            )
+          else
+            if publish? do
+              case PlatserMap.publish_geofence(geofence, actor: actor) do
+                {:ok, published} ->
+                  socket
+                  |> reset_geofence_form()
+                  |> select_map_object(:geofence, published)
+                  |> push_event("geofence_added", geofence_to_feature(published))
+                  |> put_flash(:info, "Geofence published! Everyone can see it.")
+
+                {:error, %Ash.Error.Invalid{} = err} ->
+                  msg = Ash.Error.to_error_class(err).message || "Could not publish geofence"
+                  socket |> reset_geofence_form() |> put_flash(:error, msg)
+
+                {:error, _} ->
+                  socket
+                  |> reset_geofence_form()
+                  |> put_flash(:error, "Could not publish geofence")
+              end
+            else
+              socket
+              |> reset_geofence_form()
+              |> select_map_object(:geofence, geofence)
+              |> push_event("geofence_added", geofence_to_feature(geofence))
+              |> put_flash(:info, "Geofence saved as draft. Only you can see it.")
+            end
           end
 
         {:noreply, socket}
@@ -1438,6 +1601,17 @@ defmodule PlatserWeb.MapLive do
             </.link>
           </div>
         </div>
+
+        <%= if @sharing? and @in_event_boundary? do %>
+          <div class="fixed top-16 right-4 z-20 pointer-events-none">
+            <div
+              id="event-boundary-chip"
+              class="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50/95 px-3 py-1.5 text-xs font-semibold text-emerald-700 shadow-lg backdrop-blur-sm"
+            >
+              <.icon name="hero-check-circle" class="w-3.5 h-3.5" /> In event area
+            </div>
+          </div>
+        <% end %>
       </div>
 
       <%!-- Location pick overlay --%>
@@ -1539,6 +1713,15 @@ defmodule PlatserWeb.MapLive do
             name="hero-map-pin"
             class={["w-5 h-5", if(@sharing?, do: "text-white", else: "text-emerald-500")]}
           />
+        </button>
+        <button
+          id="check-in-btn"
+          type="button"
+          data-check-in="true"
+          class="w-12 h-12 bg-amber-500 rounded-full shadow-lg flex items-center justify-center hover:bg-amber-600 active:scale-95 transition-all"
+          title="Check in once"
+        >
+          <.icon name="hero-flag" class="w-5 h-5 text-white" />
         </button>
         <button
           id="add-geofence-btn"
@@ -1699,8 +1882,58 @@ defmodule PlatserWeb.MapLive do
                       </label>
                     <% end %>
                   </div>
+                  <%= if @geofence_purpose == "boundary" do %>
+                    <p class="mt-2 text-xs text-indigo-600">
+                      Boundary geofences are always public.
+                    </p>
+                  <% end %>
                 </div>
               <% end %>
+
+              <%!-- Color --%>
+              <div>
+                <label for="poi-color" class="block text-sm font-medium text-gray-700 mb-2">
+                  Color
+                </label>
+                <div class="flex items-center gap-3 flex-wrap">
+                  <div class="flex items-center gap-2">
+                    <div
+                      class="w-8 h-8 rounded-lg border-2 border-white shadow ring-1 ring-gray-200 shrink-0"
+                      style={"background-color: #{@poi_color}"}
+                    />
+                    <input
+                      id="poi-color"
+                      type="color"
+                      name="poi[color]"
+                      value={@poi_color}
+                      class="w-10 h-10 rounded-lg border border-gray-300 cursor-pointer p-0.5 bg-white"
+                    />
+                  </div>
+                  <div class="flex gap-1.5 flex-wrap">
+                    <%= for color <- @poi_color_options do %>
+                      <label class="cursor-pointer">
+                        <input
+                          type="radio"
+                          name="poi[color]"
+                          value={color}
+                          checked={@poi_color == color}
+                          class="sr-only"
+                        />
+                        <span
+                          class={[
+                            "block w-6 h-6 rounded-full border-2 border-white shadow ring-1 transition-transform hover:scale-110 active:scale-95",
+                            if(@poi_color == color,
+                              do: "ring-gray-600 scale-110",
+                              else: "ring-gray-200"
+                            )
+                          ]}
+                          style={"background-color: #{color}"}
+                        />
+                      </label>
+                    <% end %>
+                  </div>
+                </div>
+              </div>
 
               <%= if is_nil(@editing_poi_id) and @poi_step == :editing do %>
                 <div>
@@ -1978,10 +2211,7 @@ defmodule PlatserWeb.MapLive do
                   </div>
                   <div class="flex gap-1.5 flex-wrap">
                     <%= for {_purpose_key, color} <- @purpose_colors do %>
-                      <label
-                        class="cursor-pointer"
-                        title={color}
-                      >
+                      <label class="cursor-pointer">
                         <input
                           type="radio"
                           name="geofence[color]"
@@ -2008,15 +2238,26 @@ defmodule PlatserWeb.MapLive do
               <%!-- Actions --%>
               <div class="flex gap-2 pt-1 pb-2">
                 <button
+                  id="geofence-save-btn"
                   type="submit"
                   name="publish"
                   value="false"
                   class="flex-1 py-2.5 rounded-xl border border-gray-300 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 active:scale-95 transition-all"
                 >
-                  {if @editing_geofence_id, do: "Save", else: "Save draft"}
+                  <%= cond do %>
+                    <% @geofence_purpose == "boundary" and is_nil(@editing_geofence_id) -> %>
+                      Create boundary
+                    <% @geofence_purpose == "boundary" -> %>
+                      Save boundary
+                    <% @editing_geofence_id -> %>
+                      Save
+                    <% true -> %>
+                      Save draft
+                  <% end %>
                 </button>
-                <%= if not @editing_geofence_published do %>
+                <%= if not @editing_geofence_published and @geofence_purpose != "boundary" do %>
                   <button
+                    id="geofence-publish-btn"
                     type="submit"
                     name="publish"
                     value="true"
@@ -2191,10 +2432,73 @@ defmodule PlatserWeb.MapLive do
                   </div>
                 <% end %>
               <% end %>
+
+              <div id="map-item-activity" class="rounded-2xl border border-gray-200 bg-white">
+                <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-100">
+                  <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    Activity
+                  </p>
+                  <span class="text-xs text-gray-400">Live</span>
+                </div>
+                <div class="px-4 py-4 space-y-3">
+                  <%= if item.comment && item.comment != "" do %>
+                    <blockquote
+                      id="map-item-comment-quote"
+                      class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700 italic whitespace-pre-wrap"
+                    >
+                      "{item.comment}"
+                    </blockquote>
+                  <% end %>
+                  <div
+                    id="selected-map-object-activity-entries"
+                    phx-update="stream"
+                    class="max-h-72 overflow-y-auto space-y-2"
+                  >
+                    <div
+                      id="selected-map-object-activity-entries-empty"
+                      class="hidden only:block text-center text-sm text-gray-400 py-6"
+                    >
+                      No activity for this item yet.
+                    </div>
+                    <div
+                      :for={{id, entry} <- @streams.selected_map_object_entries}
+                      id={id}
+                      data-action={entry.action}
+                      data-subject-id={entry.subject_id}
+                      class="flex items-start gap-3 rounded-2xl border border-gray-100 bg-gray-50 px-3 py-2.5"
+                    >
+                      <div class={[
+                        "w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5",
+                        entry_badge_class(entry.action)
+                      ]}>
+                        <.icon
+                          name={entry_icon(entry.action)}
+                          class={["w-4 h-4", entry_icon_class(entry.action)]}
+                        />
+                      </div>
+                      <div class="flex-1 min-w-0">
+                        <p class="text-sm text-gray-800 leading-snug">{entry.message}</p>
+                        <p class="text-xs text-gray-400 mt-0.5">
+                          {Calendar.strftime(entry.inserted_at, "%H:%M")}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <%!-- Action bar --%>
             <div class="border-t border-gray-100 px-5 py-4 space-y-2 shrink-0">
+              <%= if @selected_map_object_can_manage && kind == :geofence && item.purpose == :boundary do %>
+                <button
+                  id="map-item-fit-boundary-btn"
+                  phx-click="focus_selected_map_object"
+                  class="w-full py-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm font-semibold hover:bg-emerald-100 active:scale-95 transition-all"
+                >
+                  Fit to boundary
+                </button>
+              <% end %>
               <%= if @selected_map_object_can_manage && MapInspection.resource_status(item) == :draft do %>
                 <button
                   id="map-item-publish-btn"
@@ -2335,6 +2639,23 @@ defmodule PlatserWeb.MapLive do
             </button>
           </div>
 
+          <div class="px-4 pt-3 pb-2 border-b border-gray-100">
+            <div class="flex flex-wrap gap-2">
+              <%= for filter <- activity_filter_options() do %>
+                <button
+                  id={"activity-filter-#{activity_filter_dom_id(filter.value)}"}
+                  type="button"
+                  phx-click="set_activity_filter"
+                  phx-value-filter={filter.value}
+                  class={activity_filter_button_classes(@activity_filter == filter.value)}
+                >
+                  <.icon name={filter.icon} class="w-3.5 h-3.5" />
+                  <span>{filter.label}</span>
+                </button>
+              <% end %>
+            </div>
+          </div>
+
           <%!-- Feed entries --%>
           <div
             id="activity-entries"
@@ -2350,10 +2671,17 @@ defmodule PlatserWeb.MapLive do
             <div
               :for={{id, entry} <- @streams.entries}
               id={id}
+              data-action={entry.action}
               class="activity-entry flex items-start gap-3 py-2.5 border-b border-gray-100 last:border-0"
             >
-              <div class="w-8 h-8 bg-blue-50 rounded-full flex items-center justify-center shrink-0 mt-0.5">
-                <.icon name={entry_icon(entry.action)} class="w-4 h-4 text-blue-600" />
+              <div class={[
+                "w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5",
+                entry_badge_class(entry.action)
+              ]}>
+                <.icon
+                  name={entry_icon(entry.action)}
+                  class={["w-4 h-4", entry_icon_class(entry.action)]}
+                />
               </div>
               <div class="flex-1 min-w-0">
                 <p class="text-sm text-gray-800 leading-snug">{entry.message}</p>
@@ -2379,9 +2707,9 @@ defmodule PlatserWeb.MapLive do
     end
   end
 
-  @spec load_map_data(Ecto.UUID.t(), Platser.Accounts.User.t()) ::
-          {[Poi.t()], [Geofence.t()], [Entry.t()]}
-  defp load_map_data(event_id, actor) do
+  @spec load_map_data(Ecto.UUID.t(), Platser.Accounts.User.t(), activity_filter()) ::
+          {[Poi.t()], [Geofence.t()], [Entry.t()], [Entry.t()]}
+  defp load_map_data(event_id, actor, filter) do
     pois =
       case PlatserMap.list_pois_for_event(event_id, actor: actor) do
         {:ok, list} -> list
@@ -2394,13 +2722,15 @@ defmodule PlatserWeb.MapLive do
         {:error, _} -> []
       end
 
-    entries =
-      case Activity.list_entries_for_event(event_id, actor: actor) do
+    entries = list_activity_entries_for_event(event_id, actor, filter)
+
+    check_ins =
+      case Activity.list_check_ins_for_event(event_id, actor: actor) do
         {:ok, list} -> list
         {:error, _} -> []
       end
 
-    {pois, geofences, entries}
+    {pois, geofences, entries, check_ins}
   end
 
   @spec to_geojson_feature_collection([struct()], (struct() -> map())) :: map()
@@ -2418,7 +2748,8 @@ defmodule PlatserWeb.MapLive do
         "id" => poi.id,
         "name" => poi.name,
         "category" => to_string(poi.category),
-        "description" => poi.description
+        "description" => poi.description,
+        "color" => poi.color
       }
     }
   end
@@ -2436,6 +2767,149 @@ defmodule PlatserWeb.MapLive do
         "color" => geofence.color
       }
     }
+  end
+
+  @spec check_in_marker_payload(Entry.t()) :: map()
+  defp check_in_marker_payload(%Entry{} = entry) do
+    %{
+      user_id: entry.subject_id,
+      lat: entry.lat,
+      lng: entry.lng
+    }
+  end
+
+  @spec maybe_push_check_in_marker(Phoenix.LiveView.Socket.t(), Entry.t()) ::
+          Phoenix.LiveView.Socket.t()
+  defp maybe_push_check_in_marker(socket, %Entry{action: :checked_in} = entry) do
+    push_event(socket, "check_in_added", check_in_marker_payload(entry))
+  end
+
+  defp maybe_push_check_in_marker(socket, _entry), do: socket
+
+  @spec maybe_refresh_selected_map_object(
+          Phoenix.LiveView.Socket.t(),
+          MapInspection.kind(),
+          Poi.t() | Geofence.t()
+        ) :: Phoenix.LiveView.Socket.t()
+  defp maybe_refresh_selected_map_object(socket, kind, %{id: id} = item) do
+    case socket.assigns.selected_map_object do
+      %{kind: ^kind, item: %{id: selected_id}} when selected_id == id ->
+        select_map_object(socket, kind, item)
+
+      _ ->
+        socket
+    end
+  end
+
+  @spec maybe_stream_activity_entry(Phoenix.LiveView.Socket.t(), Entry.t()) ::
+          Phoenix.LiveView.Socket.t()
+  defp maybe_stream_activity_entry(socket, %Entry{} = entry) do
+    if activity_entry_matches_filter?(entry, socket.assigns.activity_filter) do
+      stream_insert(socket, :entries, entry, at: 0)
+    else
+      socket
+    end
+  end
+
+  @spec maybe_stream_selected_map_object_entry(Phoenix.LiveView.Socket.t(), Entry.t()) ::
+          Phoenix.LiveView.Socket.t()
+  defp maybe_stream_selected_map_object_entry(socket, %Entry{} = entry) do
+    case socket.assigns.selected_map_object do
+      %{kind: kind, item: %{id: id}} ->
+        if entry.subject_id == id and entry.subject_type == Atom.to_string(kind) do
+          stream_insert(socket, :selected_map_object_entries, entry, at: 0)
+        else
+          socket
+        end
+
+      _ ->
+        socket
+    end
+  end
+
+  @spec activity_entry_matches_filter?(Entry.t(), activity_filter()) :: boolean()
+  defp activity_entry_matches_filter?(_entry, :all), do: true
+
+  defp activity_entry_matches_filter?(%Entry{action: action}, filter) do
+    action in activity_filter_actions(filter)
+  end
+
+  @spec activity_filter_options() :: [
+          %{icon: String.t(), label: String.t(), value: activity_filter()}
+        ]
+  defp activity_filter_options do
+    [
+      %{icon: "hero-squares-2x2", label: "All", value: :all},
+      %{icon: "hero-flag", label: "Check-ins", value: :check_ins},
+      %{icon: "hero-map", label: "Geofence events", value: :geofence_events},
+      %{icon: "hero-map-pin", label: "Published items", value: :published_items},
+      %{icon: "hero-chat-bubble-left-right", label: "Comments", value: :comments}
+    ]
+  end
+
+  @spec activity_filter_dom_id(activity_filter()) :: String.t()
+  defp activity_filter_dom_id(filter), do: filter |> to_string() |> String.replace("_", "-")
+
+  @spec activity_filter_button_classes(boolean()) :: [String.t()]
+  defp activity_filter_button_classes(true) do
+    [
+      "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold",
+      "bg-slate-900 text-white shadow-sm"
+    ]
+  end
+
+  defp activity_filter_button_classes(false) do
+    [
+      "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold",
+      "bg-slate-100 text-slate-600 hover:bg-slate-200"
+    ]
+  end
+
+  @spec entry_badge_class(atom()) :: String.t()
+  defp entry_badge_class(:checked_in), do: "bg-amber-50"
+  defp entry_badge_class(:entered_geofence), do: "bg-blue-50"
+  defp entry_badge_class(:exited_geofence), do: "bg-rose-50"
+  defp entry_badge_class(:poi_published), do: "bg-emerald-50"
+  defp entry_badge_class(:geofence_published), do: "bg-emerald-50"
+  defp entry_badge_class(:comment_added), do: "bg-gray-100"
+  defp entry_badge_class(:joined_event), do: "bg-violet-50"
+  defp entry_badge_class(_), do: "bg-blue-50"
+
+  @spec entry_icon_class(atom()) :: String.t()
+  defp entry_icon_class(:checked_in), do: "text-amber-600"
+  defp entry_icon_class(:entered_geofence), do: "text-blue-600"
+  defp entry_icon_class(:exited_geofence), do: "text-rose-600"
+  defp entry_icon_class(:poi_published), do: "text-emerald-600"
+  defp entry_icon_class(:geofence_published), do: "text-emerald-600"
+  defp entry_icon_class(:comment_added), do: "text-gray-600"
+  defp entry_icon_class(:joined_event), do: "text-violet-600"
+  defp entry_icon_class(_), do: "text-blue-600"
+
+  @spec parse_activity_filter(String.t()) :: activity_filter() | nil
+  defp parse_activity_filter("all"), do: :all
+  defp parse_activity_filter("check_ins"), do: :check_ins
+  defp parse_activity_filter("geofence_events"), do: :geofence_events
+  defp parse_activity_filter("published_items"), do: :published_items
+  defp parse_activity_filter("comments"), do: :comments
+  defp parse_activity_filter(_), do: nil
+
+  @spec activity_filter_actions(activity_filter()) :: [atom()]
+  defp activity_filter_actions(:check_ins), do: [:checked_in]
+  defp activity_filter_actions(:geofence_events), do: [:entered_geofence, :exited_geofence]
+  defp activity_filter_actions(:published_items), do: [:poi_published, :geofence_published]
+  defp activity_filter_actions(:comments), do: [:comment_added]
+
+  @spec list_activity_entries_for_event(
+          Ecto.UUID.t(),
+          Platser.Accounts.User.t(),
+          activity_filter()
+        ) ::
+          [Entry.t()]
+  defp list_activity_entries_for_event(event_id, actor, filter) do
+    case Activity.list_entries_for_event_with_filter(event_id, actor, filter) do
+      {:ok, list} -> list
+      {:error, _} -> []
+    end
   end
 
   @spec format_coords(Geo.Point.t()) :: String.t()
@@ -2458,6 +2932,7 @@ defmodule PlatserWeb.MapLive do
   defp entry_icon(:comment_added), do: "hero-chat-bubble-left"
   defp entry_icon(:entered_geofence), do: "hero-arrow-right-circle"
   defp entry_icon(:exited_geofence), do: "hero-arrow-left-circle"
+  defp entry_icon(:checked_in), do: "hero-flag"
   defp entry_icon(_), do: "hero-bell"
 
   @spec category_icon(atom()) :: String.t()
@@ -2522,5 +2997,33 @@ defmodule PlatserWeb.MapLive do
       east: Enum.max(lngs),
       north: Enum.max(lats)
     }
+  end
+
+  @spec boundary_geofence_ids([Geofence.t()]) :: [Ecto.UUID.t()]
+  defp boundary_geofence_ids(geofences) do
+    Enum.reduce(geofences, [], fn
+      %Geofence{purpose: :boundary, id: id}, acc -> [id | acc]
+      _, acc -> acc
+    end)
+  end
+
+  @spec presence_in_boundary?(EventPresence.location_meta() | nil, [Geofence.t()]) :: boolean()
+  defp presence_in_boundary?(nil, _geofences), do: false
+
+  defp presence_in_boundary?(%{geofence_ids: geofence_ids}, geofences) do
+    boundary_ids = boundary_geofence_ids(geofences)
+    Enum.any?(geofence_ids, &(&1 in boundary_ids))
+  end
+
+  @spec upsert_geofence([Geofence.t()], Geofence.t()) :: [Geofence.t()]
+  defp upsert_geofence(geofences, geofence) do
+    geofences
+    |> Enum.reject(&(&1.id == geofence.id))
+    |> then(&[geofence | &1])
+  end
+
+  @spec remove_geofence([Geofence.t()], Ecto.UUID.t()) :: [Geofence.t()]
+  defp remove_geofence(geofences, geofence_id) do
+    Enum.reject(geofences, &(&1.id == geofence_id))
   end
 end

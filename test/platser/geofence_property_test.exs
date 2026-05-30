@@ -154,7 +154,7 @@ defmodule Platser.GeofencePropertyTest do
       end
     end
 
-    property "polygons with >= 3 valid WGS-84 vertices are accepted" do
+    property "boundary polygons with >= 3 valid WGS-84 vertices are accepted and auto-published" do
       check all(polygon <- valid_polygon_gen(), max_runs: 30) do
         {user, event} = create_event_with_member()
 
@@ -171,7 +171,44 @@ defmodule Platser.GeofencePropertyTest do
           )
 
         assert {:ok, geofence} = result
-        assert geofence.visibility == :private
+        assert geofence.visibility == :public
+        assert not is_nil(geofence.published_at)
+      end
+    end
+  end
+
+  describe "boundary uniqueness" do
+    property "creating a second boundary geofence for the same event always fails" do
+      check all(
+              first_polygon <- valid_polygon_gen(),
+              second_polygon <- valid_polygon_gen(),
+              max_runs: 20
+            ) do
+        {user, event} = create_event_with_member()
+
+        assert {:ok, _first} =
+                 PlatserMap.create_geofence(
+                   %{
+                     name: "Boundary One",
+                     purpose: :boundary,
+                     color: "#3B82F6",
+                     geometry: first_polygon,
+                     event_id: event.id
+                   },
+                   actor: user
+                 )
+
+        assert {:error, _} =
+                 PlatserMap.create_geofence(
+                   %{
+                     name: "Boundary Two",
+                     purpose: :boundary,
+                     color: "#3B82F6",
+                     geometry: second_polygon,
+                     event_id: event.id
+                   },
+                   actor: user
+                 )
       end
     end
   end
@@ -241,7 +278,7 @@ defmodule Platser.GeofencePropertyTest do
           PlatserMap.create_geofence(
             %{
               name: "Publish Test",
-              purpose: :boundary,
+              purpose: :meeting_zone,
               color: "#3B82F6",
               geometry: polygon,
               event_id: event.id

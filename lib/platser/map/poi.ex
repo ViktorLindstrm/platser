@@ -20,7 +20,7 @@ defmodule Platser.Map.Poi do
 
     create :create do
       primary? true
-      accept [:name, :description, :category, :location, :event_id]
+      accept [:name, :description, :category, :location, :event_id, :color]
       change set_attribute(:visibility, :private)
       change relate_actor(:creator)
     end
@@ -43,7 +43,7 @@ defmodule Platser.Map.Poi do
     end
 
     update :update do
-      accept [:name, :description, :category, :location]
+      accept [:name, :description, :category, :location, :color]
       require_atomic? false
 
       validate attribute_equals(:visibility, :private) do
@@ -52,13 +52,15 @@ defmodule Platser.Map.Poi do
     end
 
     update :update_metadata do
-      accept [:name, :description]
+      accept [:name, :description, :color]
       require_atomic? false
     end
 
     update :update_comment do
       accept [:comment]
       require_atomic? false
+
+      change Platser.Map.Changes.BroadcastCommentUpdate
     end
 
     destroy :destroy do
@@ -120,6 +122,8 @@ defmodule Platser.Map.Poi do
     attribute :description, :string
 
     attribute :comment, :string
+
+    attribute :color, :string, default: "#3B82F6"
 
     attribute :category, :atom do
       allow_nil? false

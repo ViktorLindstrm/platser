@@ -45,3 +45,9 @@ is created or published, all members should be notified via a live activity feed
   users are in different locations.
 - **Negative:** Feed can be noisy during active collaboration sessions. Future work:
   notification preferences / mute.
+
+## Amendment: Unified, filterable activity panel (task #39)
+
+The activity drawer now includes filter chips for all, check-ins, geofence events, published
+items, and comments. Comment saves create `comment_added` activity entries so the feed and the
+inspection drawer can share the same activity model.
