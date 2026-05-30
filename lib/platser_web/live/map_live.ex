@@ -150,10 +150,13 @@ defmodule PlatserWeb.MapLive do
   def handle_info(:push_map_init, socket) do
     event_id = socket.assigns.event.id
 
+    bounds = bounds_to_map(socket.assigns.event.bounds)
+    fallback_bounds = compute_fallback_bounds(socket.assigns.pois, socket.assigns.geofences)
+
     map_payload = %{
       pois: to_geojson_feature_collection(socket.assigns.pois, &poi_to_feature/1),
       geofences: to_geojson_feature_collection(socket.assigns.geofences, &geofence_to_feature/1),
-      bounds: bounds_to_map(socket.assigns.event.bounds),
+      bounds: bounds || fallback_bounds,
       check_ins: Enum.map(socket.assigns.check_ins, &check_in_marker_payload/1)
     }
 
@@ -3001,6 +3004,53 @@ defmodule PlatserWeb.MapLive do
   defp bounds_to_map(%Geo.Polygon{coordinates: [ring | _]}) do
     lngs = Enum.map(ring, &elem(&1, 0))
     lats = Enum.map(ring, &elem(&1, 1))
+
+    %{
+      west: Enum.min(lngs),
+      south: Enum.min(lats),
+      east: Enum.max(lngs),
+      north: Enum.max(lats)
+    }
+  end
+
+  @spec compute_fallback_bounds([Poi.t()], [Geofence.t()]) :: map() | nil
+  defp compute_fallback_bounds(pois, geofences) do
+    poi_coords = extract_coordinates_from_pois(pois)
+    geofence_coords = extract_coordinates_from_geofences(geofences)
+    all_coords = poi_coords ++ geofence_coords
+
+    case all_coords do
+      [] -> nil
+      coords -> compute_bounds_from_coordinates(coords)
+    end
+  end
+
+  @spec extract_coordinates_from_pois([Poi.t()]) :: [{float(), float()}]
+  defp extract_coordinates_from_pois(pois) do
+    Enum.reduce(pois, [], fn poi, acc ->
+      case poi.location do
+        %Geo.Point{coordinates: {lng, lat}} -> [{lng, lat} | acc]
+        _ -> acc
+      end
+    end)
+  end
+
+  @spec extract_coordinates_from_geofences([Geofence.t()]) :: [{float(), float()}]
+  defp extract_coordinates_from_geofences(geofences) do
+    Enum.reduce(geofences, [], fn geofence, acc ->
+      case geofence.geometry do
+        %Geo.Polygon{coordinates: [ring | _]} -> ring ++ acc
+        %Geo.LineString{coordinates: coords} -> coords ++ acc
+        %Geo.Point{coordinates: {lng, lat}} -> [{lng, lat} | acc]
+        _ -> acc
+      end
+    end)
+  end
+
+  @spec compute_bounds_from_coordinates([{float(), float()}] | []) :: map()
+  defp compute_bounds_from_coordinates(coords) do
+    lngs = Enum.map(coords, &elem(&1, 0))
+    lats = Enum.map(coords, &elem(&1, 1))
 
     %{
       west: Enum.min(lngs),

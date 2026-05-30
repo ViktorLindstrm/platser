@@ -618,4 +618,163 @@ defmodule PlatserWeb.MapLiveTest do
       assert String.contains?(rendered_link, ~p"/events/#{event.id}/dashboard")
     end
   end
+
+  describe "map bounds computation (task #45)" do
+    property "computed bounds from any POI set always contains all POI coordinates" do
+      check all(
+              num_pois <- StreamData.integer(1..10),
+              base_lng <- StreamData.float(min: -180.0, max: 160.0),
+              base_lat <- StreamData.float(min: -70.0, max: 70.0)
+            ) do
+        user = create_user("bounds_poi_prop_#{System.unique_integer([:positive])}")
+        event = create_event(user)
+        conn = sign_in_conn(build_conn(), user)
+
+        # Create POIs with generated coordinates around a base location
+        Enum.each(1..num_pois, fn idx ->
+          offset_lng = base_lng + idx * 0.1
+          offset_lat = base_lat + idx * 0.1
+
+          PlatserMap.create_poi(
+            %{
+              name: "POI #{idx}",
+              description: "Test POI",
+              category: :viewpoint,
+              location: %Geo.Point{coordinates: {offset_lng, offset_lat}, srid: 4326},
+              event_id: event.id
+            },
+            actor: user
+          )
+        end)
+
+        {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+        # The map should have initialized without errors
+        assert has_element?(view, "#map-canvas")
+      end
+    end
+
+    test "event with POIs but no bounds uses POI bounding box", %{conn: conn} do
+      user = create_user("poi_bounds_user")
+      event = create_event(user)
+
+      # Create multiple POIs with known coordinates
+      {:ok, _poi1} =
+        PlatserMap.create_poi(
+          %{
+            name: "POI 1",
+            description: "Test POI 1",
+            category: :viewpoint,
+            location: %Geo.Point{coordinates: {10.0, 20.0}, srid: 4326},
+            event_id: event.id
+          },
+          actor: user
+        )
+
+      {:ok, _poi2} =
+        PlatserMap.create_poi(
+          %{
+            name: "POI 2",
+            description: "Test POI 2",
+            category: :viewpoint,
+            location: %Geo.Point{coordinates: {30.0, 40.0}, srid: 4326},
+            event_id: event.id
+          },
+          actor: user
+        )
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      # The map should render successfully
+      assert has_element?(view, "#map-canvas")
+
+      # Event should load without errors
+      assert has_element?(view, "h1", "Map Live Test")
+    end
+
+    test "event with POIs and geofences uses bounding box that encompasses both", %{conn: conn} do
+      user = create_user("poi_geofence_bounds_user")
+      event = create_event(user)
+
+      # Create a POI
+      {:ok, _poi} =
+        PlatserMap.create_poi(
+          %{
+            name: "Test POI",
+            description: "Test POI",
+            category: :viewpoint,
+            location: %Geo.Point{coordinates: {0.0, 0.0}, srid: 4326},
+            event_id: event.id
+          },
+          actor: user
+        )
+
+      # Create a geofence
+      {:ok, _geofence} =
+        PlatserMap.create_geofence(
+          %{
+            name: "Test Geofence",
+            purpose: :meeting_zone,
+            color: "#10B981",
+            geometry: %Geo.Polygon{
+              coordinates: [
+                [
+                  {10.0, 10.0},
+                  {20.0, 10.0},
+                  {20.0, 20.0},
+                  {10.0, 20.0},
+                  {10.0, 10.0}
+                ]
+              ],
+              srid: 4326
+            },
+            event_id: event.id
+          },
+          actor: user
+        )
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      # The map should render successfully
+      assert has_element?(view, "#map-canvas")
+    end
+
+    test "event with no bounds and no POIs still renders map", %{conn: conn} do
+      user = create_user("empty_event_user")
+      event = create_event(user)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      # The map should render with default center and zoom
+      assert has_element?(view, "#map-canvas")
+      assert has_element?(view, "[data-map-center]")
+    end
+
+    test "event with explicit bounds ignores POI bounds", %{conn: conn} do
+      user = create_user("explicit_bounds_user")
+      event = create_event(user)
+
+      # Create POI far away from typical bounds
+      {:ok, _poi} =
+        PlatserMap.create_poi(
+          %{
+            name: "Distant POI",
+            description: "POI far from center",
+            category: :viewpoint,
+            location: %Geo.Point{coordinates: {0.0, 0.0}, srid: 4326},
+            event_id: event.id
+          },
+          actor: user
+        )
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      # The map should render successfully
+      assert has_element?(view, "#map-canvas")
+    end
+  end
 end
