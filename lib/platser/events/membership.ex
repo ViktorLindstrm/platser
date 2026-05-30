@@ -49,6 +49,19 @@ defmodule Platser.Events.Membership do
         )
       end
     end
+
+    destroy :remove do
+      description "Remove a member from an event. Only admins can remove members, and the last admin cannot be removed."
+      require_atomic? false
+      change Platser.Events.Changes.GuardLastAdmin
+    end
+
+    update :update_role do
+      description "Update a member's role. Only admins can update roles, and the last admin cannot be demoted."
+      accept [:role]
+      require_atomic? false
+      change Platser.Events.Changes.GuardLastAdmin
+    end
   end
 
   policies do
@@ -65,6 +78,14 @@ defmodule Platser.Events.Membership do
 
     policy action(:join) do
       authorize_if actor_present()
+    end
+
+    policy action(:remove) do
+      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
+    end
+
+    policy action(:update_role) do
+      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
     end
   end
 

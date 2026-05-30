@@ -191,6 +191,65 @@ defmodule PlatserWeb.Events.DashboardLive do
     end
   end
 
+  def handle_event("remove_member", %{"id" => membership_id}, socket) do
+    actor = socket.assigns.current_user
+
+    case Ash.get(Membership, membership_id, actor: actor) do
+      {:ok, membership} ->
+        case Events.remove_member(membership, actor: actor) do
+          :ok ->
+            {:noreply,
+             socket
+             |> stream_delete(:memberships, membership)
+             |> put_flash(:info, "Member removed from event.")}
+
+          {:error, %Ash.Error.Forbidden{}} ->
+            {:noreply, put_flash(socket, :error, "You do not have permission to remove members.")}
+
+          {:error, %Ash.Error.Invalid{} = err} ->
+            message = format_error(err)
+            {:noreply, put_flash(socket, :error, message)}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not remove member.")}
+        end
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Member not found.")}
+    end
+  end
+
+  def handle_event("update_member_role", %{"id" => membership_id, "role" => new_role}, socket) do
+    actor = socket.assigns.current_user
+
+    case Ash.get(Membership, membership_id, actor: actor) do
+      {:ok, membership} ->
+        new_role_atom = String.to_atom(new_role)
+
+        case Events.update_member_role(membership, %{role: new_role_atom}, actor: actor) do
+          {:ok, updated_membership} ->
+            {:noreply,
+             socket
+             |> stream_insert(:memberships, updated_membership)
+             |> put_flash(:info, "Member role updated.")}
+
+          {:error, %Ash.Error.Forbidden{}} ->
+            {:noreply,
+             put_flash(socket, :error, "You do not have permission to update member roles.")}
+
+          {:error, %Ash.Error.Invalid{} = err} ->
+            message = format_error(err)
+            {:noreply, put_flash(socket, :error, message)}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not update member role.")}
+        end
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Member not found.")}
+    end
+  end
+
   @impl Phoenix.LiveView
   def render(assigns) do
     ~H"""
@@ -396,7 +455,7 @@ defmodule PlatserWeb.Events.DashboardLive do
             <div
               :for={{id, membership} <- @streams.memberships}
               id={id}
-              class="flex items-center gap-3 px-5 py-3"
+              class="flex items-center gap-3 px-5 py-3 group"
             >
               <div class="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                 <span class="text-sm font-bold text-primary uppercase">
@@ -420,6 +479,41 @@ defmodule PlatserWeb.Events.DashboardLive do
               ]}>
                 {if membership.role == :admin, do: "Admin", else: "Member"}
               </span>
+              <%= if @is_admin do %>
+                <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <%= if membership.role == :admin do %>
+                    <button
+                      phx-click="update_member_role"
+                      phx-value-id={membership.id}
+                      phx-value-role="member"
+                      title="Demote to Member"
+                      class="p-1.5 rounded-lg hover:bg-base-200 text-base-content/60 hover:text-base-content transition-colors"
+                      data-confirm="Demote this member to regular member?"
+                    >
+                      <.icon name="hero-arrow-down" class="w-4 h-4" />
+                    </button>
+                  <% else %>
+                    <button
+                      phx-click="update_member_role"
+                      phx-value-id={membership.id}
+                      phx-value-role="admin"
+                      title="Promote to Admin"
+                      class="p-1.5 rounded-lg hover:bg-base-200 text-base-content/60 hover:text-base-content transition-colors"
+                    >
+                      <.icon name="hero-arrow-up" class="w-4 h-4" />
+                    </button>
+                  <% end %>
+                  <button
+                    phx-click="remove_member"
+                    phx-value-id={membership.id}
+                    title="Remove Member"
+                    class="p-1.5 rounded-lg hover:bg-red-100 text-base-content/60 hover:text-red-600 transition-colors dark:hover:bg-red-900/20"
+                    data-confirm="Remove this member from the event? They can rejoin with the invite code."
+                  >
+                    <.icon name="hero-x-mark" class="w-4 h-4" />
+                  </button>
+                </div>
+              <% end %>
             </div>
           </div>
         </section>
@@ -608,5 +702,11 @@ defmodule PlatserWeb.Events.DashboardLive do
   @spec admin?([Membership.t()], Ecto.UUID.t()) :: boolean()
   defp admin?(memberships, user_id) do
     Enum.any?(memberships, &(&1.user_id == user_id and &1.role == :admin))
+  end
+
+  @spec format_error(Ash.Error.Invalid.t()) :: String.t()
+  defp format_error(%Ash.Error.Invalid{} = error) do
+    error.errors
+    |> Enum.map_join(", ", fn e -> Map.get(e, :message, "unknown error") end)
   end
 end

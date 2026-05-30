@@ -16,6 +16,8 @@ defmodule Platser.Events do
     resource Platser.Events.Membership do
       define :join_event, action: :join, args: [:join_code]
       define :list_memberships_for_event, action: :list_for_event, args: [:event_id]
+      define :remove_member, action: :remove
+      define :update_member_role, action: :update_role
     end
   end
 end
