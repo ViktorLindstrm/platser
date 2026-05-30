@@ -21,6 +21,9 @@ Use **short alphanumeric join codes** to invite participants to events.
   removing existing members.
 - The join page shows event name and date before confirming, so the user knows what they're
   joining.
+- On the event dashboard, admins can view the join code and click a "Copy invite link" button
+  to copy the full invite URL (`/join/{code}`) to the clipboard with visual feedback (checkmark
+  confirmation for 2 seconds).
 
 ### Future extensions (out of scope for MVP)
 - Expiring codes (valid until event starts)
