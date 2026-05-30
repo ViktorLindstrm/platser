@@ -9,6 +9,7 @@ defmodule Platser.Events do
       define :get_event_by_join_code, action: :get_by_join_code, args: [:join_code]
       define :regenerate_event_join_code, action: :regenerate_join_code
       define :update_event_settings, action: :update_settings
+      define :update_event, action: :update
       define :set_event_bounds, action: :set_bounds, args: [:bounds]
     end
 

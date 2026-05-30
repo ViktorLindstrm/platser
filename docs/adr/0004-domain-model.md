@@ -111,6 +111,14 @@ The following must be direct dependencies in `mix.exs` (not just transitive):
 | message | string | human-readable |
 | inserted_at | utc_datetime | |
 
+### Update Actions
+
+#### `Events.Event` `:update` action
+Admins (members with `role: :admin`) may update event metadata: `name`, `description`, `starts_at`, and `ends_at`.
+The update is performed via `Events.update_event/3` from the domain code interface.
+On successful update, the action broadcasts an `{:event_updated, event}` message on the `event:{id}:settings` PubSub topic
+so connected clients (e.g., `MapLive`) can synchronize the updated event details without a full page reload.
+
 ### Authorization
 Ash policies enforce:
 - Only event members can read event data

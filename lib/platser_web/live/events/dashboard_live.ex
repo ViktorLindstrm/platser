@@ -1,6 +1,8 @@
 defmodule PlatserWeb.Events.DashboardLive do
   use PlatserWeb, :live_view
 
+  import Phoenix.Component
+
   alias Platser.Events
   alias Platser.Events.Event
   alias Platser.Events.Membership
@@ -19,11 +21,17 @@ defmodule PlatserWeb.Events.DashboardLive do
         geofences = load_geofences(event_id, actor)
         is_admin = admin?(memberships, actor.id)
 
+        if connected?(socket) do
+          Phoenix.PubSub.subscribe(Platser.PubSub, "event:#{event.id}:settings")
+        end
+
         socket =
           socket
           |> assign(:page_title, event.name)
           |> assign(:event, event)
           |> assign(:is_admin, is_admin)
+          |> assign(:editing, false)
+          |> assign(:event_form, nil)
           |> stream(:memberships, memberships)
           |> stream(:pois, pois)
           |> stream(:geofences, geofences)
@@ -35,6 +43,63 @@ defmodule PlatserWeb.Events.DashboardLive do
          socket
          |> put_flash(:error, "Event not found or you are not a member.")
          |> push_navigate(to: ~p"/events")}
+    end
+  end
+
+  @impl Phoenix.LiveView
+  def handle_info({:event_updated, event}, socket) do
+    {:noreply,
+     socket
+     |> assign(:event, event)
+     |> assign(:page_title, event.name)
+     |> put_flash(:info, "Event updated.")}
+  end
+
+  def handle_info({:event_settings_updated, event}, socket) do
+    {:noreply, assign(socket, :event, event)}
+  end
+
+  @impl Phoenix.LiveView
+  def handle_event("edit_event", _params, socket) do
+    event = socket.assigns.event
+    actor = socket.assigns.current_user
+
+    form =
+      AshPhoenix.Form.for_update(event, :update,
+        actor: actor,
+        as: "event",
+        domain: Platser.Events
+      )
+
+    {:noreply,
+     socket
+     |> assign(:editing, true)
+     |> assign(:event_form, to_form(form))}
+  end
+
+  def handle_event("cancel_edit", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:editing, false)
+     |> assign(:event_form, nil)}
+  end
+
+  def handle_event("save_event", %{"event" => params}, socket) do
+    case AshPhoenix.Form.submit(socket.assigns.event_form.source, params: params) do
+      {:ok, updated_event} ->
+        {:noreply,
+         socket
+         |> assign(:event, updated_event)
+         |> assign(:page_title, updated_event.name)
+         |> assign(:editing, false)
+         |> assign(:event_form, nil)
+         |> put_flash(:info, "Event updated successfully.")}
+
+      {:error, form} ->
+        {:noreply,
+         socket
+         |> assign(:event_form, to_form(form))
+         |> put_flash(:error, "Could not update event.")}
     end
   end
 
@@ -153,13 +218,88 @@ defmodule PlatserWeb.Events.DashboardLive do
               </span>
             </div>
           </div>
-          <.link
-            navigate={~p"/events/#{@event.id}/map"}
-            class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-content text-sm font-semibold hover:brightness-110 active:scale-95 transition-all"
-          >
-            <.icon name="hero-map" class="w-4 h-4" /> Open Map
-          </.link>
+          <div class="flex items-center gap-2">
+            <%= if @is_admin do %>
+              <button
+                id="edit-event-btn"
+                phx-click="edit_event"
+                class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-base-200 text-base-content/70 text-sm font-semibold hover:bg-base-300 active:scale-95 transition-all"
+              >
+                <.icon name="hero-pencil-square" class="w-4 h-4" /> Edit
+              </button>
+            <% end %>
+            <.link
+              navigate={~p"/events/#{@event.id}/map"}
+              class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-content text-sm font-semibold hover:brightness-110 active:scale-95 transition-all"
+            >
+              <.icon name="hero-map" class="w-4 h-4" /> Open Map
+            </.link>
+          </div>
         </div>
+
+        <%!-- Edit event modal --%>
+        <%= if @editing do %>
+          <div
+            id="edit-event-modal"
+            phx-hook=".EditEventModal"
+            class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+            phx-click="cancel_edit"
+          >
+            <div class="bg-base-100 rounded-2xl shadow-xl max-w-md w-full p-6 space-y-4">
+              <h2 class="text-xl font-bold text-base-content">Edit Event</h2>
+              <.form
+                for={@event_form}
+                id="edit-event-form"
+                phx-submit="save_event"
+                class="space-y-4"
+              >
+                <.input
+                  field={@event_form[:name]}
+                  type="text"
+                  label="Event name"
+                  placeholder="Enter event name"
+                  required
+                />
+                <.input
+                  field={@event_form[:description]}
+                  type="textarea"
+                  label="Description"
+                  placeholder="Enter event description (optional)"
+                  phx-debounce="300"
+                />
+                <div class="grid grid-cols-2 gap-3">
+                  <.input
+                    field={@event_form[:starts_at]}
+                    type="datetime-local"
+                    label="Starts at"
+                    required
+                  />
+                  <.input
+                    field={@event_form[:ends_at]}
+                    type="datetime-local"
+                    label="Ends at"
+                    required
+                  />
+                </div>
+                <div class="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    phx-click="cancel_edit"
+                    class="flex-1 px-4 py-2.5 rounded-xl bg-base-200 text-base-content/70 font-medium hover:bg-base-300 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    class="flex-1 px-4 py-2.5 rounded-xl bg-primary text-primary-content font-medium hover:brightness-110 active:scale-95 transition-all"
+                  >
+                    Save Changes
+                  </button>
+                </div>
+              </.form>
+            </div>
+          </div>
+        <% end %>
 
         <%!-- Join code card --%>
         <section
@@ -394,6 +534,17 @@ defmodule PlatserWeb.Events.DashboardLive do
               console.error("Failed to copy to clipboard:", err);
             }
           });
+        }
+      }
+    </script>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".EditEventModal">
+      export default {
+        mounted() {
+          const modal = this.el;
+          const content = modal.querySelector('[id="edit-event-form"]')?.parentElement;
+          if (content) {
+            content.addEventListener("click", e => e.stopPropagation());
+          }
         }
       }
     </script>

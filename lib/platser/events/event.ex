@@ -52,6 +52,13 @@ defmodule Platser.Events.Event do
       argument :bounds, Platser.Types.Geometry, allow_nil?: true
       change set_attribute(:bounds, arg(:bounds))
     end
+
+    update :update do
+      description "Updates event name, description, and dates. Admin only."
+      require_atomic? false
+      accept [:name, :description, :starts_at, :ends_at]
+      change Platser.Events.Changes.BroadcastEventUpdate
+    end
   end
 
   policies do
@@ -80,6 +87,10 @@ defmodule Platser.Events.Event do
     end
 
     policy action(:set_bounds) do
+      authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
+    end
+
+    policy action(:update) do
       authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
     end
   end
