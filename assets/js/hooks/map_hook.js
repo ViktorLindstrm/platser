@@ -111,6 +111,113 @@ function extendBounds(bounds, coordinates) {
   return bounds
 }
 
+function pointsEqual(a, b) {
+  return a[0] === b[0] && a[1] === b[1]
+}
+
+function distance(a, b) {
+  return Math.hypot(a[0] - b[0], a[1] - b[1])
+}
+
+function smoothRing(ring, cornerRatio = 0.05, segments = 2) {
+  if (!Array.isArray(ring) || ring.length < 4) return ring
+
+  const closed = pointsEqual(ring[0], ring[ring.length - 1])
+  const points = closed ? ring.slice(0, -1) : ring.slice()
+  const count = points.length
+
+  if (count < 3) return ring
+
+  const smoothed = []
+
+  for (let i = 0; i < count; i++) {
+    const prev = points[(i - 1 + count) % count]
+    const curr = points[i]
+    const next = points[(i + 1) % count]
+
+    const prevLen = distance(prev, curr)
+    const nextLen = distance(curr, next)
+
+    if (prevLen === 0 || nextLen === 0) {
+      smoothed.push(curr)
+      continue
+    }
+
+    const cornerCut = Math.min(prevLen, nextLen) * cornerRatio
+    const startT = cornerCut / prevLen
+    const endT = cornerCut / nextLen
+
+    const start = [
+      curr[0] + (prev[0] - curr[0]) * startT,
+      curr[1] + (prev[1] - curr[1]) * startT,
+    ]
+    const end = [
+      curr[0] + (next[0] - curr[0]) * endT,
+      curr[1] + (next[1] - curr[1]) * endT,
+    ]
+
+    smoothed.push(start)
+
+    for (let step = 1; step < segments; step++) {
+      const t = step / segments
+      const inv = 1 - t
+      smoothed.push([
+        inv * inv * start[0] + 2 * inv * t * curr[0] + t * t * end[0],
+        inv * inv * start[1] + 2 * inv * t * curr[1] + t * t * end[1],
+      ])
+    }
+
+    smoothed.push(end)
+  }
+
+  if (smoothed.length > 0 && !pointsEqual(smoothed[0], smoothed[smoothed.length - 1])) {
+    smoothed.push(smoothed[0])
+  }
+
+  return smoothed
+}
+
+function smoothGeometry(geometry) {
+  if (!geometry || !geometry.type) return geometry
+
+  if (geometry.type === "Polygon") {
+    return {
+      ...geometry,
+      coordinates: geometry.coordinates.map((ring, index) =>
+        // Keep holes intact to avoid accidental self-intersections.
+        index === 0 ? smoothRing(ring) : ring,
+      ),
+    }
+  }
+
+  if (geometry.type === "MultiPolygon") {
+    return {
+      ...geometry,
+      coordinates: geometry.coordinates.map(polygon =>
+        polygon.map((ring, index) => (index === 0 ? smoothRing(ring) : ring)),
+      ),
+    }
+  }
+
+  return geometry
+}
+
+function smoothFeature(feature) {
+  if (!feature?.geometry) return feature
+  return {
+    ...feature,
+    geometry: smoothGeometry(feature.geometry),
+  }
+}
+
+function smoothFeatureCollection(collection) {
+  if (!collection?.features) return collection
+  return {
+    ...collection,
+    features: collection.features.map(smoothFeature),
+  }
+}
+
 export default {
   mounted() {
     const pmtilesUrl = this.el.dataset.pmtilesUrl
@@ -451,9 +558,13 @@ export default {
         id: "draw-outline",
         type: "line",
         source: "draw-preview",
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
         paint: {
           "line-color": "#6366F1",
-          "line-width": 2,
+          "line-width": 3,
           "line-dasharray": [3, 2],
         },
       })
@@ -509,8 +620,10 @@ export default {
   },
 
   _initSources(pois, geofences) {
+    const renderedGeofences = smoothFeatureCollection(geofences)
+
     this.sourceData.pois = pois
-    this.sourceData.geofences = geofences
+    this.sourceData.geofences = renderedGeofences
 
     if (!this.map.getSource("pois")) {
       this.map.addSource("pois", {type: "geojson", data: pois})
@@ -519,9 +632,9 @@ export default {
     }
 
     if (!this.map.getSource("geofences")) {
-      this.map.addSource("geofences", {type: "geojson", data: geofences})
+      this.map.addSource("geofences", {type: "geojson", data: renderedGeofences})
     } else {
-      this.map.getSource("geofences").setData(geofences)
+      this.map.getSource("geofences").setData(renderedGeofences)
     }
 
     if (!this.map.getLayer("geofence-fills")) {
@@ -541,6 +654,10 @@ export default {
         type: "line",
         source: "geofences",
         filter: ["==", ["get", "purpose"], "boundary"],
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
         paint: {
           "line-color": ["coalesce", ["get", "color"], "#6366F1"],
           "line-width": 4,
@@ -567,6 +684,10 @@ export default {
         type: "line",
         source: "geofences",
         filter: ["!=", ["get", "purpose"], "boundary"],
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
         paint: {
           "line-color": ["coalesce", ["get", "color"], "#6366F1"],
           "line-width": 2,
@@ -594,8 +715,9 @@ export default {
   _upsertFeature(sourceId, feature) {
     const data = this.sourceData[sourceId]
     if (!data) return
-    data.features = data.features.filter(f => f.id !== feature.id)
-    data.features.push(feature)
+    const renderedFeature = sourceId === "geofences" ? smoothFeature(feature) : feature
+    data.features = data.features.filter(f => f.id !== renderedFeature.id)
+    data.features.push(renderedFeature)
     const source = this.map.getSource(sourceId)
     if (source) source.setData(data)
   },

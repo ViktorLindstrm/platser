@@ -52,6 +52,44 @@ defmodule Platser.Accounts.User do
       change set_attribute(:is_simulated, true)
     end
 
+    create :create_guest do
+      description "Auto-provisions a temporary guest user with a synthetic email and no password."
+      accept [:display_name]
+
+      change fn changeset, _ ->
+        token = :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
+        synthetic_email = "guest_#{token}@platser.guest"
+
+        display_name =
+          case Ash.Changeset.get_attribute(changeset, :display_name) do
+            nil -> "Guest_#{String.slice(token, 0, 6)}"
+            "" -> "Guest_#{String.slice(token, 0, 6)}"
+            name -> name
+          end
+
+        changeset
+        |> Ash.Changeset.force_change_attribute(:email, synthetic_email)
+        |> Ash.Changeset.force_change_attribute(:display_name, display_name)
+        |> Ash.Changeset.force_change_attribute(:is_guest, true)
+      end
+    end
+
+    update :upgrade_to_registered do
+      description "Upgrades a guest user to a registered account with a real email and password."
+      require_atomic? false
+      accept [:email, :display_name]
+      argument :password, :string, allow_nil?: false, sensitive?: true
+      argument :password_confirmation, :string, allow_nil?: false, sensitive?: true
+
+      validate attribute_equals(:is_guest, true),
+        message: "only guest accounts can be upgraded via this action"
+
+      validate confirm(:password, :password_confirmation)
+      change set_context(%{strategy_name: :password})
+      change set_attribute(:is_guest, false)
+      change AshAuthentication.Strategy.Password.HashPasswordChange
+    end
+
     update :update_profile do
       description "Allows a user to update their display name."
       require_atomic? false
@@ -80,6 +118,14 @@ defmodule Platser.Accounts.User do
       authorize_if actor_present()
     end
 
+    policy action(:create_guest) do
+      authorize_if always()
+    end
+
+    policy action(:upgrade_to_registered) do
+      authorize_if expr(id == ^actor(:id))
+    end
+
     policy action(:update_profile) do
       authorize_if expr(id == ^actor(:id))
     end
@@ -91,6 +137,7 @@ defmodule Platser.Accounts.User do
     attribute :display_name, :string, allow_nil?: false, public?: true
     attribute :hashed_password, :string, allow_nil?: true, sensitive?: true
     attribute :is_simulated, :boolean, default: false, public?: true
+    attribute :is_guest, :boolean, default: false, public?: true
   end
 
   identities do

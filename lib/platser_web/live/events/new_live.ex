@@ -7,19 +7,26 @@ defmodule PlatserWeb.Events.NewLive do
   def mount(_params, _session, socket) do
     actor = socket.assigns.current_user
 
-    form =
-      AshPhoenix.Form.for_create(Event, :create,
-        actor: actor,
-        as: "event",
-        domain: Platser.Events
-      )
+    if actor.is_guest do
+      {:ok,
+       socket
+       |> put_flash(:error, "Guest accounts cannot create events. Create a free account first.")
+       |> push_navigate(to: ~p"/upgrade")}
+    else
+      form =
+        AshPhoenix.Form.for_create(Event, :create,
+          actor: actor,
+          as: "event",
+          domain: Platser.Events
+        )
 
-    socket =
-      socket
-      |> assign(:page_title, "New Event")
-      |> assign(:form, to_form(form))
+      socket =
+        socket
+        |> assign(:page_title, "New Event")
+        |> assign(:form, to_form(form))
 
-    {:ok, socket}
+      {:ok, socket}
+    end
   end
 
   @impl Phoenix.LiveView

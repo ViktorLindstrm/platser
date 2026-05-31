@@ -63,6 +63,7 @@ defmodule Platser.Events.Event do
 
   policies do
     policy action(:create) do
+      forbid_if actor_attribute_equals(:is_guest, true)
       authorize_if actor_present()
     end
 
@@ -75,7 +76,7 @@ defmodule Platser.Events.Event do
     end
 
     policy action(:get_by_join_code) do
-      authorize_if actor_present()
+      authorize_if always()
     end
 
     policy action(:regenerate_join_code) do

@@ -30,6 +30,24 @@ defmodule PlatserWeb.Router do
     reset_route auth_routes_prefix: "/auth"
     sign_out_route AuthController
     auth_routes AuthController, Platser.Accounts.User, path: "/auth"
+
+    post "/guest-join/:code", GuestController, :guest_join
+    post "/upgrade-account", GuestController, :upgrade_account
+  end
+
+  # Publicly accessible join page — works for unauthenticated AND authenticated users.
+  # AshAuthentication.Phoenix.LiveSession must come first so current_user is populated
+  # for already-authenticated visitors.
+  live_session :public_join,
+    on_mount: [
+      {AshAuthentication.Phoenix.LiveSession, :default},
+      {PlatserWeb.LiveUserAuth, :live_user_optional}
+    ] do
+    scope "/", PlatserWeb do
+      pipe_through :browser
+
+      live "/join/:code", Events.JoinLive
+    end
   end
 
   live_session :authenticated,
@@ -43,9 +61,9 @@ defmodule PlatserWeb.Router do
       live "/events", Events.IndexLive
       live "/events/new", Events.NewLive
       live "/events/:id/dashboard", Events.DashboardLive
-      live "/join/:code", Events.JoinLive
       live "/events/:event_id/map", MapLive
       live "/profile", ProfileLive
+      live "/upgrade", UpgradeLive
     end
   end
 

@@ -6,7 +6,7 @@ defmodule PlatserWeb.Events.JoinLive do
   alias Platser.Events
   alias Platser.Events.Membership
 
-  @type join_status :: :show | :already_member | :admin | :not_found | :joined
+  @type join_status :: :show | :already_member | :admin | :not_found | :joined | :guest_form
 
   @impl Phoenix.LiveView
   def mount(%{"code" => code}, _session, socket) do
@@ -52,7 +52,7 @@ defmodule PlatserWeb.Events.JoinLive do
   @impl Phoenix.LiveView
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash}>
+    <Layouts.app flash={@flash} current_scope={@current_user}>
       <div class="min-h-screen flex items-center justify-center px-4">
         <%= cond do %>
           <% @status == :not_found -> %>
@@ -159,8 +159,66 @@ defmodule PlatserWeb.Events.JoinLive do
                 </.link>
               </div>
             </div>
+          <% @status == :guest_form -> %>
+            <%!-- Unauthenticated visitor — offer guest join or sign-in --%>
+            <div class="max-w-md w-full space-y-6">
+              <div class="bg-base-200 rounded-2xl p-8 space-y-6">
+                <div>
+                  <span class="inline-block text-xs font-semibold uppercase tracking-widest text-primary mb-3">
+                    You're invited
+                  </span>
+                  <h1 class="text-2xl font-bold text-base-content">{@event.name}</h1>
+                  <%= if @event.description do %>
+                    <p class="mt-2 text-base-content/60">{@event.description}</p>
+                  <% end %>
+                  <div class="mt-3 text-sm text-base-content/50">
+                    <.icon name="hero-calendar" class="w-4 h-4 inline mr-1" />
+                    {@event.starts_at |> Calendar.strftime("%b %-d, %Y at %H:%M")} &ndash; {@event.ends_at
+                    |> Calendar.strftime("%H:%M")}
+                  </div>
+                </div>
+
+                <div class="border-t border-base-300 pt-6 space-y-4">
+                  <p class="text-sm font-semibold text-base-content">Join as a guest</p>
+                  <.form
+                    for={%{}}
+                    action={~p"/guest-join/#{@event.join_code}"}
+                    method="post"
+                    id="guest-join-form"
+                  >
+                    <div class="space-y-3">
+                      <input
+                        id="display_name"
+                        name="display_name"
+                        type="text"
+                        class="w-full rounded-xl border border-base-300 bg-base-100 px-4 py-3 text-base-content focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
+                        placeholder="Your name (optional)"
+                        autocomplete="nickname"
+                      />
+                      <button
+                        type="submit"
+                        id="guest-join-btn"
+                        class="w-full py-3 px-6 rounded-xl bg-primary text-primary-content font-semibold hover:brightness-110 active:scale-95 transition-all"
+                      >
+                        Join as Guest
+                      </button>
+                    </div>
+                  </.form>
+                </div>
+
+                <div class="border-t border-base-300 pt-4 text-center text-sm text-base-content/50">
+                  Already have an account?
+                  <.link
+                    navigate={~p"/sign-in"}
+                    class="text-primary hover:underline font-medium"
+                  >
+                    Sign in
+                  </.link>
+                </div>
+              </div>
+            </div>
           <% true -> %>
-            <%!-- :show status — non-member viewing join page --%>
+            <%!-- :show status — authenticated non-member viewing join page --%>
             <div class="max-w-md w-full space-y-6">
               <div class="bg-base-200 rounded-2xl p-8 space-y-6">
                 <div>
@@ -193,8 +251,24 @@ defmodule PlatserWeb.Events.JoinLive do
     """
   end
 
-  @spec load_event(Phoenix.LiveView.Socket.t(), String.t(), Platser.Accounts.User.t()) ::
+  @spec load_event(Phoenix.LiveView.Socket.t(), String.t(), Platser.Accounts.User.t() | nil) ::
           Phoenix.LiveView.Socket.t()
+  defp load_event(socket, code, nil) do
+    case Events.get_event_by_join_code(code, authorize?: false) do
+      {:ok, nil} ->
+        assign(socket, :status, :not_found)
+
+      {:ok, event} ->
+        socket
+        |> assign(:event, event)
+        |> assign(:membership, nil)
+        |> assign(:status, :guest_form)
+
+      {:error, _} ->
+        assign(socket, :status, :not_found)
+    end
+  end
+
   defp load_event(socket, code, actor) do
     case Events.get_event_by_join_code(code, actor: actor) do
       {:ok, nil} ->

@@ -50,13 +50,15 @@ defmodule PlatserWeb.Events.IndexLive do
               Events you've created or joined.
             </p>
           </div>
-          <.link
-            navigate={~p"/events/new"}
-            id="create-event-btn"
-            class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-primary-content text-sm font-semibold hover:brightness-110 active:scale-95 transition-all"
-          >
-            <.icon name="hero-plus" class="w-4 h-4" /> New Event
-          </.link>
+          <%= if !@current_user.is_guest do %>
+            <.link
+              navigate={~p"/events/new"}
+              id="create-event-btn"
+              class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-primary-content text-sm font-semibold hover:brightness-110 active:scale-95 transition-all"
+            >
+              <.icon name="hero-plus" class="w-4 h-4" /> New Event
+            </.link>
+          <% end %>
         </div>
 
         <%!-- Join an event form --%>

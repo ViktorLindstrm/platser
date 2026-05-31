@@ -54,12 +54,22 @@ defmodule PlatserWeb.Layouts do
             >
               My Events
             </.link>
-            <.link
-              navigate={~p"/profile"}
-              class="text-sm text-base-content/70 hover:text-base-content transition-colors"
-            >
-              Profile
-            </.link>
+            <%= if !Map.get(@current_scope, :is_guest, false) do %>
+              <.link
+                navigate={~p"/profile"}
+                class="text-sm text-base-content/70 hover:text-base-content transition-colors"
+              >
+                Profile
+              </.link>
+            <% end %>
+            <%= if Map.get(@current_scope, :is_guest, false) do %>
+              <.link
+                navigate={~p"/upgrade"}
+                class="inline-flex items-center gap-1.5 text-sm font-medium text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 transition-colors"
+              >
+                <.icon name="hero-user-plus" class="w-4 h-4" /> Create Account
+              </.link>
+            <% end %>
             <.link
               href={~p"/sign-out"}
               method="delete"
@@ -71,6 +81,26 @@ defmodule PlatserWeb.Layouts do
         </div>
       </div>
     </header>
+
+    <%= if @current_scope && Map.get(@current_scope, :is_guest, false) do %>
+      <div class="bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800">
+        <div class="max-w-5xl mx-auto px-4 sm:px-6 py-2 flex items-center justify-between gap-4">
+          <div class="flex items-center gap-2 text-sm text-amber-800 dark:text-amber-300">
+            <.icon name="hero-information-circle" class="w-4 h-4 shrink-0" />
+            <span>
+              You're browsing as a guest. <strong>Your data may be lost</strong>
+              if you close this browser.
+            </span>
+          </div>
+          <.link
+            navigate={~p"/upgrade"}
+            class="shrink-0 text-sm font-semibold text-amber-700 dark:text-amber-300 underline hover:no-underline transition-all"
+          >
+            Save my account →
+          </.link>
+        </div>
+      </div>
+    <% end %>
 
     <main class="max-w-5xl mx-auto px-4 sm:px-6 py-8">
       {render_slot(@inner_block)}

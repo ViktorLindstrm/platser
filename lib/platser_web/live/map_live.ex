@@ -1559,7 +1559,7 @@ defmodule PlatserWeb.MapLive do
   @impl Phoenix.LiveView
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash}>
+    <Layouts.app flash={@flash} current_scope={@current_user}>
       <%!-- Full-viewport map canvas --%>
       <div id="map-wrapper" style="position: fixed; inset: 0; z-index: 10;">
         <div
