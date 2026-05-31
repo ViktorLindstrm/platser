@@ -26,7 +26,14 @@ defmodule PlatserWeb.Router do
     get "/", PageController, :home
     get "/join", PageController, :join_redirect
 
-    sign_in_route register_path: "/register", reset_path: "/reset", auth_routes_prefix: "/auth"
+    sign_in_route(
+      register_path: "/register",
+      reset_path: "/reset",
+      auth_routes_prefix: "/auth",
+      live_view: PlatserWeb.AuthLive.SignInLive,
+      overrides: [PlatserWeb.AuthOverrides, AshAuthentication.Phoenix.Overrides.Default]
+    )
+
     reset_route auth_routes_prefix: "/auth"
     sign_out_route AuthController
     auth_routes AuthController, Platser.Accounts.User, path: "/auth"
