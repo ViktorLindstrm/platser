@@ -40,6 +40,8 @@ defmodule PlatserWeb.Router do
 
     post "/guest-join/:code", GuestController, :guest_join
     post "/upgrade-account", GuestController, :upgrade_account
+
+    get "/uploads/*path", MediaController, :show
   end
 
   # Publicly accessible join page — works for unauthenticated AND authenticated users.

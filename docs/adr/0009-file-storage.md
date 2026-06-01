@@ -1,7 +1,7 @@
 # ADR-0009: File Storage — Phoenix LiveView Native Uploads
 
 ## Status
-Amended (supersedes the ash_storage and waffle approaches previously considered)
+Accepted (amended by ADR-0029 — authorized delivery replaces public Plug.Static serving)
 
 ## Context
 POIs support rich media: photos uploaded by event participants. We need a file storage

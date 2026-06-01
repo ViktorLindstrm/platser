@@ -30,6 +30,12 @@ defmodule Platser.Media.Attachment do
       prepare build(sort: [inserted_at: :asc])
     end
 
+    read :get_by_path do
+      argument :path, :string, allow_nil?: false
+      filter expr(path == ^arg(:path))
+      get? true
+    end
+
     create :create do
       accept [:filename, :stored_filename, :content_type, :path, :poi_id]
       change relate_actor(:uploader)
@@ -147,5 +153,9 @@ defmodule Platser.Media.Attachment do
     belongs_to :uploader, Platser.Accounts.User do
       allow_nil? false
     end
+  end
+
+  identities do
+    identity :unique_path, [:path]
   end
 end

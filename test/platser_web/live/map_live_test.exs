@@ -472,9 +472,10 @@ defmodule PlatserWeb.MapLiveTest do
     refute has_element?(view, ~s(#activity-entries [data-action="checked_in"]))
     refute has_element?(view, ~s(#activity-entries [data-action="poi_published"]))
 
-    render_click(element(view, "#activity-filter-check-ins"))
+    render_click(element(view, "#activity-filter-updates"))
 
     assert has_element?(view, ~s(#activity-entries [data-action="checked_in"]))
+    assert has_element?(view, ~s(#activity-entries [data-action="poi_published"]))
     refute has_element?(view, ~s(#activity-entries [data-action="comment_added"]))
   end
 
@@ -482,15 +483,30 @@ defmodule PlatserWeb.MapLiveTest do
     user = create_user("inspection_activity")
     event = create_event(user)
     poi = create_poi(user, event)
-    {:ok, commented} = PlatserMap.update_poi_comment(poi, %{comment: "Pinned note"}, actor: user)
+
+    {:ok, _comment_entry} =
+      Activity.create_entry(
+        %{
+          action: :comment_added,
+          subject_type: "poi",
+          subject_id: poi.id,
+          message: "#{user.display_name}: Pinned note",
+          event_id: event.id
+        },
+        actor: user,
+        authorize?: false
+      )
+
     conn = sign_in_conn(conn, user)
 
     {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
 
-    render_hook(view, "inspect_map_object", %{kind: "poi", id: commented.id})
+    render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
 
     assert has_element?(view, "#map-item-activity")
-    assert has_element?(view, "#map-item-comment-quote")
+    assert has_element?(view, "#selected-map-object-activity-filter-all")
+    assert has_element?(view, "#selected-map-object-activity-filter-comments")
+    assert has_element?(view, "#selected-map-object-activity-filter-updates")
 
     assert has_element?(
              view,
@@ -502,7 +518,7 @@ defmodule PlatserWeb.MapLiveTest do
              ~s(#selected-map-object-activity-entries [data-action="poi_published"])
            )
 
-    {:ok, published} = PlatserMap.publish_poi(commented, actor: user)
+    {:ok, published} = PlatserMap.publish_poi(poi, actor: user)
     _ = render(view)
 
     assert has_element?(view, "#map-item-drawer")
@@ -510,6 +526,30 @@ defmodule PlatserWeb.MapLiveTest do
     assert has_element?(
              view,
              ~s(#selected-map-object-activity-entries [data-action="poi_published"])
+           )
+
+    render_click(element(view, "#selected-map-object-activity-filter-comments"))
+
+    assert has_element?(
+             view,
+             ~s(#selected-map-object-activity-entries [data-action="comment_added"])
+           )
+
+    refute has_element?(
+             view,
+             ~s(#selected-map-object-activity-entries [data-action="poi_published"])
+           )
+
+    render_click(element(view, "#selected-map-object-activity-filter-updates"))
+
+    assert has_element?(
+             view,
+             ~s(#selected-map-object-activity-entries [data-action="poi_published"])
+           )
+
+    refute has_element?(
+             view,
+             ~s(#selected-map-object-activity-entries [data-action="comment_added"])
            )
 
     refute has_element?(view, "#map-item-publish-btn")
@@ -777,6 +817,114 @@ defmodule PlatserWeb.MapLiveTest do
       assert has_element?(view, "#map-canvas")
     end
 
+    test "non-admin can submit a comment when public comments are enabled", %{conn: conn} do
+      admin = create_user("comment_admin")
+      member = create_user("comment_member")
+      event = create_event(admin)
+
+      {:ok, _membership} = Platser.Events.join_event(event.join_code, actor: member)
+
+      {:ok, _event} =
+        Ash.update(event, %{allow_public_comments: true}, actor: admin, action: :update_settings)
+
+      {:ok, poi} =
+        PlatserMap.create_poi(
+          %{
+            name: "Commentable POI",
+            description: "POI for public comment test",
+            category: :viewpoint,
+            location: %Geo.Point{coordinates: {174.7633, -36.8485}, srid: 4326},
+            event_id: event.id
+          },
+          actor: admin
+        )
+
+      {:ok, poi} = PlatserMap.publish_poi(poi, actor: admin)
+
+      conn = sign_in_conn(conn, member)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
+      assert has_element?(view, "#map-item-comment-form")
+
+      render_submit(element(view, "#map-item-comment-form"), %{
+        "comment" => %{"body" => "Member note"}
+      })
+
+      assert has_element?(view, "#selected-map-object-activity-entries", "Member note")
+
+      {:ok, entries} = Activity.list_entries_for_subject(poi.id, "poi", event.id, actor: member)
+
+      assert Enum.any?(entries, fn entry ->
+               entry.action == :comment_added and String.contains?(entry.message, "Member note")
+             end)
+    end
+
+    test "non-admin can submit a geofence comment when public comments are enabled", %{conn: conn} do
+      admin = create_user("comment_admin_geofence")
+      member = create_user("comment_member_geofence")
+      event = create_event(admin)
+
+      {:ok, _membership} = Platser.Events.join_event(event.join_code, actor: member)
+
+      {:ok, _event} =
+        Ash.update(event, %{allow_public_comments: true}, actor: admin, action: :update_settings)
+
+      geofence = create_geofence(admin, event)
+
+      conn = sign_in_conn(conn, member)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_hook(view, "inspect_map_object", %{kind: "geofence", id: geofence.id})
+      assert has_element?(view, "#map-item-comment-form")
+
+      render_submit(element(view, "#map-item-comment-form"), %{
+        "comment" => %{"body" => "Geofence member note"}
+      })
+
+      assert has_element?(view, "#selected-map-object-activity-entries", "Geofence member note")
+
+      {:ok, entries} =
+        Activity.list_entries_for_subject(geofence.id, "geofence", event.id, actor: member)
+
+      assert Enum.any?(entries, fn entry ->
+               entry.action == :comment_added and
+                 entry.subject_type == "geofence" and
+                 String.contains?(entry.message, "Geofence member note")
+             end)
+    end
+
+    test "inspection comments are scoped to selected item subject type and event", %{conn: conn} do
+      user = create_user("comment_scope_user")
+      event_a = create_event(user)
+      event_b = create_event(user)
+      poi = create_poi(user, event_a)
+      {:ok, poi} = PlatserMap.publish_poi(poi, actor: user)
+
+      {:ok, _entry} =
+        Activity.create_entry(
+          %{
+            action: :comment_added,
+            subject_type: "poi",
+            subject_id: poi.id,
+            message: "#{user.display_name}: Cross-event comment should not render here",
+            event_id: event_b.id
+          },
+          actor: user
+        )
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event_a.id}/map")
+
+      render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
+
+      refute has_element?(
+               view,
+               "#selected-map-object-activity-entries",
+               "Cross-event comment should not render here"
+             )
+    end
+
     test "comment form is always visible for admin regardless of public_comments setting", %{
       conn: conn
     } do
@@ -797,7 +945,7 @@ defmodule PlatserWeb.MapLiveTest do
       render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
 
       # Comment form should be visible for admin
-      assert has_element?(view, "#map-item-comment")
+      assert has_element?(view, "#map-item-comment-form")
       # Comments disabled message should NOT be shown
       html = render(view)
       refute html =~ "Comments disabled"
@@ -805,10 +953,13 @@ defmodule PlatserWeb.MapLiveTest do
 
     test "non-admin can still read existing comment when public_comments disabled", %{conn: conn} do
       admin = create_user("admin_writer")
+      member = create_user("member_reader")
       event = create_event(admin)
 
+      {:ok, _membership} = Platser.Events.join_event(event.join_code, actor: member)
+
       # Create a POI
-      {:ok, poi} =
+      {:ok, draft_poi} =
         PlatserMap.create_poi(
           %{
             name: "Test POI",
@@ -820,16 +971,28 @@ defmodule PlatserWeb.MapLiveTest do
           actor: admin
         )
 
+      {:ok, poi} = PlatserMap.publish_poi(draft_poi, actor: admin)
+
       # Add a comment to the POI
-      {:ok, _poi_with_comment} =
-        PlatserMap.update_poi_comment(poi, %{comment: "This is an admin comment"}, actor: admin)
+      {:ok, _comment_entry} =
+        Activity.create_entry(
+          %{
+            action: :comment_added,
+            subject_type: "poi",
+            subject_id: poi.id,
+            message: "#{admin.display_name}: This is an admin comment",
+            event_id: event.id
+          },
+          actor: admin,
+          authorize?: false
+        )
 
       # Disable public comments
       {:ok, _event} =
         Ash.update(event, %{allow_public_comments: false}, actor: admin, action: :update_settings)
 
-      # Admin views the POI after disabling comments
-      conn = sign_in_conn(conn, admin)
+      # Non-admin views the POI after disabling comments
+      conn = sign_in_conn(conn, member)
       {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
 
       render_hook(view, "inspect_map_object", %{kind: "poi", id: poi.id})
@@ -837,6 +1000,8 @@ defmodule PlatserWeb.MapLiveTest do
       # Comment should still be visible in read-only mode
       html = render(view)
       assert html =~ "This is an admin comment"
+      assert html =~ "Comments are disabled for members right now"
+      refute has_element?(view, "#map-item-comment-form")
     end
   end
 end

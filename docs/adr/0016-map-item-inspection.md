@@ -149,3 +149,13 @@ The Publish button is now rendered in its own full-width row above the focus/edi
 The inspection drawer now includes a per-item activity stream driven by `Activity.Entry` records
 filtered by subject id. The existing editable comment field remains above the activity section, and
 the current comment is also shown as a pinned quoted block at the top of the activity stream.
+
+## Amendment 4: Additive comments (task #56)
+
+The singleton textarea (`#map-item-comment`) was replaced with an explicit add-comment form
+(`#map-item-comment-form`) and a separate comments list (`#selected-map-object-comments`).
+
+- Comment creation is submit-based (`phx-submit`) instead of blur-save overwrite.
+- Each comment is represented by an activity entry with action `:comment_added`.
+- The inspection drawer now shows additive comment history instead of a single mutable comment block.
+- See ADR-0027 for the full decision.

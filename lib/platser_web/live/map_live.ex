@@ -49,6 +49,7 @@ defmodule PlatserWeb.MapLive do
   @type geofence_step :: :idle | :drawing | :editing
   @type editing_published :: boolean()
   @type activity_filter :: Activity.feed_filter()
+  @type selected_map_object_activity_filter :: :all | :comments | :updates
   @type selected_map_object :: %{
           kind: MapInspection.kind(),
           item: Poi.t() | Geofence.t(),
@@ -109,6 +110,8 @@ defmodule PlatserWeb.MapLive do
             |> assign(:purpose_colors, @purpose_colors)
             |> assign(:selected_map_object, nil)
             |> assign(:selected_map_object_can_manage, false)
+            |> assign(:selected_map_object_activity_filter, :all)
+            |> assign(:map_comment_form, to_form(%{"body" => ""}, as: :comment))
             |> assign(:editing_poi_id, nil)
             |> assign(:editing_poi_published, false)
             |> assign(:editing_geofence_id, nil)
@@ -324,6 +327,32 @@ defmodule PlatserWeb.MapLive do
     end
   end
 
+  def handle_event("set_selected_map_object_activity_filter", %{"filter" => filter}, socket) do
+    case parse_selected_map_object_activity_filter(filter) do
+      nil ->
+        {:noreply, socket}
+
+      selected_filter ->
+        case socket.assigns.selected_map_object do
+          %{item: item} ->
+            entries =
+              load_selected_map_object_entries(
+                item,
+                socket.assigns.current_user,
+                selected_filter
+              )
+
+            {:noreply,
+             socket
+             |> assign(:selected_map_object_activity_filter, selected_filter)
+             |> stream(:selected_map_object_entries, entries, reset: true)}
+
+          _ ->
+            {:noreply, assign(socket, :selected_map_object_activity_filter, selected_filter)}
+        end
+    end
+  end
+
   def handle_event(
         "save_map_bounds",
         %{"west" => west, "south" => south, "east" => east, "north" => north},
@@ -469,6 +498,8 @@ defmodule PlatserWeb.MapLive do
 
     case load_selected_map_object(kind, id, actor) do
       {:ok, selected_map_object} ->
+        entries = load_selected_map_object_entries(selected_map_object.item, actor, :all)
+
         {:noreply,
          socket
          |> assign(:selected_map_object, selected_map_object)
@@ -476,17 +507,18 @@ defmodule PlatserWeb.MapLive do
            :selected_map_object_can_manage,
            can_manage_selected_map_object?(selected_map_object.item, actor)
          )
-         |> stream(
-           :selected_map_object_entries,
-           load_selected_map_object_entries(selected_map_object.item, actor),
-           reset: true
-         )}
+         |> assign(:selected_map_object_activity_filter, :all)
+         |> assign(:map_comment_form, to_form(%{"body" => ""}, as: :comment))
+         |> stream(:selected_map_object_entries, entries, reset: true)}
 
       {:error, :not_found} ->
         {:noreply,
          socket
          |> assign(:selected_map_object, nil)
          |> assign(:selected_map_object_can_manage, false)
+         |> assign(:selected_map_object_activity_filter, :all)
+         |> assign(:map_comment_form, to_form(%{"body" => ""}, as: :comment))
+         |> stream(:selected_map_object_entries, [], reset: true)
          |> put_flash(:error, "Could not load that map item")}
     end
   end
@@ -496,6 +528,8 @@ defmodule PlatserWeb.MapLive do
      socket
      |> assign(:selected_map_object, nil)
      |> assign(:selected_map_object_can_manage, false)
+     |> assign(:selected_map_object_activity_filter, :all)
+     |> assign(:map_comment_form, to_form(%{"body" => ""}, as: :comment))
      |> stream(:selected_map_object_entries, [], reset: true)}
   end
 
@@ -624,31 +658,52 @@ defmodule PlatserWeb.MapLive do
     {:noreply, reset_geofence_form(socket)}
   end
 
-  def handle_event("save_map_object_comment", %{"comment" => comment}, socket) do
+  def handle_event("add_map_object_comment", %{"comment" => %{"body" => body}}, socket) do
     actor = socket.assigns.current_user
+    comment = String.trim(body || "")
 
     case socket.assigns.selected_map_object do
       %{kind: :poi, item: %Poi{} = poi} ->
-        case PlatserMap.update_poi_comment(poi, %{comment: comment}, actor: actor) do
-          {:ok, updated} ->
-            {:noreply, select_map_object(socket, :poi, updated)}
+        if can_comment_on_selected_map_object?(
+             socket.assigns.selected_map_object_can_manage,
+             socket.assigns.event.allow_public_comments
+           ) and comment != "" do
+          case create_map_comment_entry(:poi, poi, comment, actor) do
+            {:ok, _entry} ->
+              {:noreply,
+               assign(socket, :map_comment_form, to_form(%{"body" => ""}, as: :comment))}
 
-          {:error, _} ->
-            {:noreply, put_flash(socket, :error, "Could not save comment.")}
+            {:error, _} ->
+              {:noreply, put_flash(socket, :error, "Could not add comment.")}
+          end
+        else
+          {:noreply, socket}
         end
 
       %{kind: :geofence, item: %Geofence{} = geofence} ->
-        case PlatserMap.update_geofence_comment(geofence, %{comment: comment}, actor: actor) do
-          {:ok, updated} ->
-            {:noreply, select_map_object(socket, :geofence, updated)}
+        if can_comment_on_selected_map_object?(
+             socket.assigns.selected_map_object_can_manage,
+             socket.assigns.event.allow_public_comments
+           ) and comment != "" do
+          case create_map_comment_entry(:geofence, geofence, comment, actor) do
+            {:ok, _entry} ->
+              {:noreply,
+               assign(socket, :map_comment_form, to_form(%{"body" => ""}, as: :comment))}
 
-          {:error, _} ->
-            {:noreply, put_flash(socket, :error, "Could not save comment.")}
+            {:error, _} ->
+              {:noreply, put_flash(socket, :error, "Could not add comment.")}
+          end
+        else
+          {:noreply, socket}
         end
 
       nil ->
         {:noreply, socket}
     end
+  end
+
+  def handle_event("add_map_object_comment", _params, socket) do
+    {:noreply, socket}
   end
 
   def handle_event("publish_selected_map_object", _params, socket) do
@@ -1172,17 +1227,31 @@ defmodule PlatserWeb.MapLive do
 
   defp load_selected_map_object(_, _, _), do: {:error, :not_found}
 
-  @spec load_selected_map_object_entries(Poi.t(), Platser.Accounts.User.t()) :: [Entry.t()]
-  defp load_selected_map_object_entries(%Poi{} = poi, actor) do
-    case Activity.list_entries_for_subject(poi.id, actor: actor) do
+  @spec load_selected_map_object_entries(
+          Poi.t(),
+          Platser.Accounts.User.t(),
+          selected_map_object_activity_filter()
+        ) :: [Entry.t()]
+  defp load_selected_map_object_entries(%Poi{} = poi, actor, filter) do
+    case Activity.list_entries_for_subject_with_filter(poi.id, "poi", poi.event_id, actor, filter) do
       {:ok, entries} -> entries
       {:error, _} -> []
     end
   end
 
-  @spec load_selected_map_object_entries(Geofence.t(), Platser.Accounts.User.t()) :: [Entry.t()]
-  defp load_selected_map_object_entries(%Geofence{} = geofence, actor) do
-    case Activity.list_entries_for_subject(geofence.id, actor: actor) do
+  @spec load_selected_map_object_entries(
+          Geofence.t(),
+          Platser.Accounts.User.t(),
+          selected_map_object_activity_filter()
+        ) :: [Entry.t()]
+  defp load_selected_map_object_entries(%Geofence{} = geofence, actor, filter) do
+    case Activity.list_entries_for_subject_with_filter(
+           geofence.id,
+           "geofence",
+           geofence.event_id,
+           actor,
+           filter
+         ) do
       {:ok, entries} -> entries
       {:error, _} -> []
     end
@@ -1261,11 +1330,13 @@ defmodule PlatserWeb.MapLive do
     actor = socket.assigns.current_user
     poi = load_item_creator(poi, actor)
     attachments = load_poi_attachments(poi.id, actor)
-    entries = load_selected_map_object_entries(poi, actor)
+    entries = load_selected_map_object_entries(poi, actor, :all)
 
     socket
     |> assign(:selected_map_object, %{kind: :poi, item: poi, attachments: attachments})
     |> assign(:selected_map_object_can_manage, can_manage_selected_map_object?(poi, actor))
+    |> assign(:selected_map_object_activity_filter, :all)
+    |> assign(:map_comment_form, to_form(%{"body" => ""}, as: :comment))
     |> stream(:selected_map_object_entries, entries, reset: true)
   end
 
@@ -1278,11 +1349,13 @@ defmodule PlatserWeb.MapLive do
     actor = socket.assigns.current_user
     geofence = load_item_creator(geofence, actor)
     attachments = load_geofence_attachments(geofence.id, actor)
-    entries = load_selected_map_object_entries(geofence, actor)
+    entries = load_selected_map_object_entries(geofence, actor, :all)
 
     socket
     |> assign(:selected_map_object, %{kind: :geofence, item: geofence, attachments: attachments})
     |> assign(:selected_map_object_can_manage, can_manage_selected_map_object?(geofence, actor))
+    |> assign(:selected_map_object_activity_filter, :all)
+    |> assign(:map_comment_form, to_form(%{"body" => ""}, as: :comment))
     |> stream(:selected_map_object_entries, entries, reset: true)
   end
 
@@ -2421,41 +2494,6 @@ defmodule PlatserWeb.MapLive do
                 </div>
               <% end %>
 
-              <%!-- Comment --%>
-              <%= if @selected_map_object_can_manage or @event.allow_public_comments do %>
-                <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                  <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                    Comment
-                  </p>
-                  <textarea
-                    id="map-item-comment"
-                    name="comment"
-                    rows="3"
-                    phx-blur="save_map_object_comment"
-                    placeholder="Add a comment…"
-                    class="w-full resize-none bg-transparent text-sm text-gray-700 leading-relaxed focus:outline-none placeholder:text-gray-400"
-                  >{item.comment || ""}</textarea>
-                </div>
-              <% else %>
-                <%= if item.comment && item.comment != "" do %>
-                  <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                      Comment
-                    </p>
-                    <p class="text-sm text-gray-600 leading-relaxed">{item.comment}</p>
-                  </div>
-                <% else %>
-                  <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                    <p class="text-xs font-semibold uppercase tracking-wide text-amber-700 mb-1">
-                      Comments disabled
-                    </p>
-                    <p class="text-sm text-amber-600 leading-relaxed">
-                      Comments are currently disabled for this event. Only organizers can comment on map items.
-                    </p>
-                  </div>
-                <% end %>
-              <% end %>
-
               <div id="map-item-activity" class="rounded-2xl border border-gray-200 bg-white">
                 <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-100">
                   <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">
@@ -2463,15 +2501,64 @@ defmodule PlatserWeb.MapLive do
                   </p>
                   <span class="text-xs text-gray-400">Live</span>
                 </div>
-                <div class="px-4 py-4 space-y-3">
-                  <%= if item.comment && item.comment != "" do %>
-                    <blockquote
-                      id="map-item-comment-quote"
-                      class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700 italic whitespace-pre-wrap"
+                <div class="px-4 pt-3 pb-2 border-b border-gray-100">
+                  <div class="flex flex-wrap gap-2">
+                    <%= for filter <- selected_map_object_activity_filter_options() do %>
+                      <button
+                        id={"selected-map-object-activity-filter-#{selected_map_object_activity_filter_dom_id(filter.value)}"}
+                        type="button"
+                        phx-click="set_selected_map_object_activity_filter"
+                        phx-value-filter={filter.value}
+                        class={
+                          activity_filter_button_classes(
+                            @selected_map_object_activity_filter == filter.value
+                          )
+                        }
+                      >
+                        <.icon name={filter.icon} class="w-3.5 h-3.5" />
+                        <span>{filter.label}</span>
+                      </button>
+                    <% end %>
+                  </div>
+                </div>
+                <%= if can_comment_on_selected_map_object?(
+                       @selected_map_object_can_manage,
+                       @event.allow_public_comments
+                     ) do %>
+                  <div class="px-4 py-3 border-b border-gray-100">
+                    <.form
+                      for={@map_comment_form}
+                      id="map-item-comment-form"
+                      phx-submit="add_map_object_comment"
+                      class="space-y-2.5"
                     >
-                      "{item.comment}"
-                    </blockquote>
-                  <% end %>
+                      <.input
+                        id="map-item-comment-input"
+                        field={@map_comment_form[:body]}
+                        type="textarea"
+                        rows="3"
+                        placeholder="Write a comment..."
+                        class="block w-full resize-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 leading-relaxed shadow-sm transition placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                      <div class="flex justify-end">
+                        <button
+                          id="map-item-comment-submit"
+                          type="submit"
+                          class="inline-flex items-center rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 active:scale-95 transition-all"
+                        >
+                          Post comment
+                        </button>
+                      </div>
+                    </.form>
+                  </div>
+                <% else %>
+                  <div class="px-4 py-3 border-b border-amber-100 bg-amber-50/60">
+                    <p class="text-xs text-amber-700">
+                      Comments are disabled for members right now. Organizers can still post updates.
+                    </p>
+                  </div>
+                <% end %>
+                <div class="px-4 py-4">
                   <div
                     id="selected-map-object-activity-entries"
                     phx-update="stream"
@@ -2500,7 +2587,9 @@ defmodule PlatserWeb.MapLive do
                         />
                       </div>
                       <div class="flex-1 min-w-0">
-                        <p class="text-sm text-gray-800 leading-snug">{entry.message}</p>
+                        <p class="text-sm text-gray-800 leading-snug break-words">
+                          {entry_display_message(entry)}
+                        </p>
                         <p class="text-xs text-gray-400 mt-0.5">
                           {Calendar.strftime(entry.inserted_at, "%H:%M")}
                         </p>
@@ -2707,7 +2796,9 @@ defmodule PlatserWeb.MapLive do
                 />
               </div>
               <div class="flex-1 min-w-0">
-                <p class="text-sm text-gray-800 leading-snug">{entry.message}</p>
+                <p class="text-sm text-gray-800 leading-snug break-words">
+                  {entry_display_message(entry)}
+                </p>
                 <p class="text-xs text-gray-400 mt-0.5">
                   {Calendar.strftime(entry.inserted_at, "%H:%M")}
                 </p>
@@ -2809,6 +2900,80 @@ defmodule PlatserWeb.MapLive do
 
   defp maybe_push_check_in_marker(socket, _entry), do: socket
 
+  @spec create_map_comment_entry(
+          MapInspection.kind(),
+          Poi.t() | Geofence.t(),
+          String.t(),
+          Platser.Accounts.User.t()
+        ) :: {:ok, Entry.t()} | {:error, term()}
+  defp create_map_comment_entry(kind, item, comment, actor) do
+    message = "#{actor.display_name} commented: #{normalize_inline_whitespace(comment)}"
+
+    with {:ok, entry} <-
+           Activity.create_entry(
+             %{
+               action: :comment_added,
+               subject_type: Atom.to_string(kind),
+               subject_id: item.id,
+               message: message,
+               event_id: item.event_id
+             },
+             actor: actor
+           ) do
+      Phoenix.PubSub.broadcast(
+        Platser.PubSub,
+        "event:#{item.event_id}:activity",
+        {:entry_added, entry}
+      )
+
+      {:ok, entry}
+    end
+  end
+
+  @spec can_comment_on_selected_map_object?(boolean(), boolean()) :: boolean()
+  defp can_comment_on_selected_map_object?(selected_map_object_can_manage, allow_public_comments) do
+    selected_map_object_can_manage or allow_public_comments
+  end
+
+  @spec selected_map_object_entry_matches_filter?(
+          Entry.t(),
+          selected_map_object_activity_filter()
+        ) ::
+          boolean()
+  defp selected_map_object_entry_matches_filter?(_entry, :all), do: true
+
+  defp selected_map_object_entry_matches_filter?(%Entry{action: :comment_added}, :comments),
+    do: true
+
+  defp selected_map_object_entry_matches_filter?(%Entry{action: :comment_added}, :updates),
+    do: false
+
+  defp selected_map_object_entry_matches_filter?(_entry, :updates), do: true
+  defp selected_map_object_entry_matches_filter?(_entry, :comments), do: false
+
+  @spec parse_selected_map_object_activity_filter(String.t()) ::
+          selected_map_object_activity_filter() | nil
+  defp parse_selected_map_object_activity_filter("all"), do: :all
+  defp parse_selected_map_object_activity_filter("comments"), do: :comments
+  defp parse_selected_map_object_activity_filter("updates"), do: :updates
+  defp parse_selected_map_object_activity_filter(_), do: nil
+
+  @spec selected_map_object_activity_filter_options() :: [
+          %{icon: String.t(), label: String.t(), value: selected_map_object_activity_filter()}
+        ]
+  defp selected_map_object_activity_filter_options do
+    [
+      %{icon: "hero-squares-2x2", label: "All", value: :all},
+      %{icon: "hero-chat-bubble-left-right", label: "Comments", value: :comments},
+      %{icon: "hero-sparkles", label: "Updates", value: :updates}
+    ]
+  end
+
+  @spec selected_map_object_activity_filter_dom_id(selected_map_object_activity_filter()) ::
+          String.t()
+  defp selected_map_object_activity_filter_dom_id(filter),
+    do: filter |> to_string() |> String.replace("_", "-")
+
   @spec maybe_refresh_selected_map_object(
           Phoenix.LiveView.Socket.t(),
           MapInspection.kind(),
@@ -2839,7 +3004,11 @@ defmodule PlatserWeb.MapLive do
   defp maybe_stream_selected_map_object_entry(socket, %Entry{} = entry) do
     case socket.assigns.selected_map_object do
       %{kind: kind, item: %{id: id}} ->
-        if entry.subject_id == id and entry.subject_type == Atom.to_string(kind) do
+        if entry.subject_id == id and entry.subject_type == Atom.to_string(kind) and
+             selected_map_object_entry_matches_filter?(
+               entry,
+               socket.assigns.selected_map_object_activity_filter
+             ) do
           stream_insert(socket, :selected_map_object_entries, entry, at: 0)
         else
           socket
@@ -2863,10 +3032,8 @@ defmodule PlatserWeb.MapLive do
   defp activity_filter_options do
     [
       %{icon: "hero-squares-2x2", label: "All", value: :all},
-      %{icon: "hero-flag", label: "Check-ins", value: :check_ins},
-      %{icon: "hero-map", label: "Geofence events", value: :geofence_events},
-      %{icon: "hero-map-pin", label: "Published items", value: :published_items},
-      %{icon: "hero-chat-bubble-left-right", label: "Comments", value: :comments}
+      %{icon: "hero-chat-bubble-left-right", label: "Comments", value: :comments},
+      %{icon: "hero-sparkles", label: "Updates", value: :updates}
     ]
   end
 
@@ -2910,6 +3077,7 @@ defmodule PlatserWeb.MapLive do
 
   @spec parse_activity_filter(String.t()) :: activity_filter() | nil
   defp parse_activity_filter("all"), do: :all
+  defp parse_activity_filter("updates"), do: :updates
   defp parse_activity_filter("check_ins"), do: :check_ins
   defp parse_activity_filter("geofence_events"), do: :geofence_events
   defp parse_activity_filter("published_items"), do: :published_items
@@ -2917,10 +3085,53 @@ defmodule PlatserWeb.MapLive do
   defp parse_activity_filter(_), do: nil
 
   @spec activity_filter_actions(activity_filter()) :: [atom()]
+  defp activity_filter_actions(:updates),
+    do: [
+      :checked_in,
+      :entered_geofence,
+      :exited_geofence,
+      :poi_published,
+      :geofence_published,
+      :joined_event
+    ]
+
   defp activity_filter_actions(:check_ins), do: [:checked_in]
   defp activity_filter_actions(:geofence_events), do: [:entered_geofence, :exited_geofence]
   defp activity_filter_actions(:published_items), do: [:poi_published, :geofence_published]
   defp activity_filter_actions(:comments), do: [:comment_added]
+
+  @spec entry_display_message(Entry.t()) :: String.t()
+  defp entry_display_message(%Entry{action: :comment_added, message: message}) do
+    normalize_comment_message(message)
+  end
+
+  defp entry_display_message(%Entry{message: message}), do: message
+
+  @spec normalize_comment_message(String.t()) :: String.t()
+  defp normalize_comment_message(message) do
+    trimmed = String.trim(message)
+
+    case Regex.run(~r/^(.+?) (?:has )?commented:\s*(.+)$/s, trimmed) do
+      [_, author, body] ->
+        "#{String.trim(author)} commented: #{normalize_inline_whitespace(body)}"
+
+      _ ->
+        case Regex.run(~r/^(.+?):\s*(.+)$/s, trimmed) do
+          [_, author, body] ->
+            "#{String.trim(author)} commented: #{normalize_inline_whitespace(body)}"
+
+          _ ->
+            normalize_inline_whitespace(trimmed)
+        end
+    end
+  end
+
+  @spec normalize_inline_whitespace(String.t()) :: String.t()
+  defp normalize_inline_whitespace(text) do
+    text
+    |> String.replace(~r/\s+/u, " ")
+    |> String.trim()
+  end
 
   @spec list_activity_entries_for_event(
           Ecto.UUID.t(),

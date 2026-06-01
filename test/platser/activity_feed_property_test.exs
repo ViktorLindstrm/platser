@@ -72,13 +72,19 @@ defmodule Platser.ActivityFeedPropertyTest do
     {user, event}
   end
 
-  defp insert_entry(user, event, action \\ :poi_published, subject_id \\ Ecto.UUID.generate()) do
+  defp insert_entry(
+         user,
+         event,
+         action \\ :poi_published,
+         subject_id \\ Ecto.UUID.generate(),
+         subject_type \\ "poi"
+       ) do
     n = System.unique_integer([:positive])
 
     Activity.create_entry(
       %{
         action: action,
-        subject_type: "poi",
+        subject_type: subject_type,
         subject_id: subject_id,
         message: "Test entry #{n}",
         event_id: event.id
@@ -117,27 +123,157 @@ defmodule Platser.ActivityFeedPropertyTest do
   end
 
   describe "subject filtering" do
-    property "list_entries_for_subject returns only entries for the requested subject" do
+    property "list_entries_for_subject returns only entries for the requested event, type and subject" do
       check all(
-              subject_entry_count <- StreamData.integer(1..8),
-              other_entry_count <- StreamData.integer(1..8),
+              matching_count <- StreamData.integer(1..8),
+              other_subject_count <- StreamData.integer(1..8),
+              other_type_count <- StreamData.integer(1..8),
+              other_event_count <- StreamData.integer(1..8),
+              max_runs: 20
+            ) do
+        {user, event} = create_event_with_member()
+        subject_id = Ecto.UUID.generate()
+        message = "same subject other type"
+
+        {:ok, other_event} =
+          Ash.create(
+            Platser.Events.Event,
+            %{
+              name: "Another Event",
+              description: "desc",
+              starts_at: DateTime.utc_now(),
+              ends_at: DateTime.add(DateTime.utc_now(), 3600)
+            },
+            actor: user
+          )
+
+        Enum.each(1..matching_count, fn _ ->
+          {:ok, _} = insert_entry(user, event, :comment_added, subject_id, "poi")
+        end)
+
+        Enum.each(1..other_subject_count, fn _ ->
+          {:ok, _} = insert_entry(user, event, :comment_added, Ecto.UUID.generate())
+        end)
+
+        Enum.each(1..other_type_count, fn _ ->
+          {:ok, _} =
+            Activity.create_entry(
+              %{
+                action: :comment_added,
+                subject_type: "geofence",
+                subject_id: subject_id,
+                message: message,
+                event_id: event.id
+              },
+              actor: user,
+              authorize?: false
+            )
+        end)
+
+        Enum.each(1..other_event_count, fn _ ->
+          {:ok, _} = insert_entry(user, other_event, :comment_added, subject_id, "poi")
+        end)
+
+        {:ok, fetched} =
+          Activity.list_entries_for_subject(subject_id, "poi", event.id, actor: user)
+
+        assert length(fetched) == matching_count
+
+        assert Enum.all?(fetched, fn entry ->
+                 entry.subject_id == subject_id and
+                   entry.subject_type == "poi" and
+                   entry.event_id == event.id
+               end)
+      end
+    end
+  end
+
+  describe "additive comments invariants" do
+    property "creating N comments is append-only and preserves all existing entries" do
+      check all(
+              n <- StreamData.integer(1..8),
               max_runs: 20
             ) do
         {user, event} = create_event_with_member()
         subject_id = Ecto.UUID.generate()
 
-        Enum.each(1..subject_entry_count, fn _ ->
-          {:ok, _} = insert_entry(user, event, :poi_published, subject_id)
-        end)
+        initial_messages =
+          for idx <- 1..n do
+            message = "Comment #{idx}-#{System.unique_integer([:positive])}"
 
-        Enum.each(1..other_entry_count, fn _ ->
-          {:ok, _} = insert_entry(user, event, :comment_added, Ecto.UUID.generate())
-        end)
+            {:ok, _} =
+              Activity.create_entry(
+                %{
+                  action: :comment_added,
+                  subject_type: "poi",
+                  subject_id: subject_id,
+                  message: message,
+                  event_id: event.id
+                },
+                actor: user
+              )
 
-        {:ok, fetched} = Activity.list_entries_for_subject(subject_id, actor: user)
+            message
+          end
 
-        assert length(fetched) == subject_entry_count
-        assert Enum.all?(fetched, &(&1.subject_id == subject_id))
+        {:ok, fetched_before} =
+          Activity.list_entries_for_subject(subject_id, "poi", event.id, actor: user)
+
+        assert length(fetched_before) == n
+
+        fetched_before_messages = MapSet.new(Enum.map(fetched_before, & &1.message))
+        assert fetched_before_messages == MapSet.new(initial_messages)
+
+        extra_message = "Comment extra-#{System.unique_integer([:positive])}"
+
+        {:ok, _} =
+          Activity.create_entry(
+            %{
+              action: :comment_added,
+              subject_type: "poi",
+              subject_id: subject_id,
+              message: extra_message,
+              event_id: event.id
+            },
+            actor: user
+          )
+
+        {:ok, fetched_after} =
+          Activity.list_entries_for_subject(subject_id, "poi", event.id, actor: user)
+
+        fetched_after_messages = MapSet.new(Enum.map(fetched_after, & &1.message))
+
+        assert length(fetched_after) == n + 1
+        assert MapSet.subset?(fetched_before_messages, fetched_after_messages)
+        assert MapSet.member?(fetched_after_messages, extra_message)
+      end
+    end
+
+    property "comment entries cannot be updated or deleted through the public API" do
+      check all(
+              message <- StreamData.string(:alphanumeric, min_length: 3, max_length: 32),
+              max_runs: 20
+            ) do
+        {user, event} = create_event_with_member()
+
+        {:ok, entry} =
+          Activity.create_entry(
+            %{
+              action: :comment_added,
+              subject_type: "poi",
+              subject_id: Ecto.UUID.generate(),
+              message: message,
+              event_id: event.id
+            },
+            actor: user
+          )
+
+        assert_raise RuntimeError, ~r/Required primary update action/, fn ->
+          Ash.update(entry, %{message: "#{message}-edited"}, actor: user)
+        end
+
+        assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Invalid.NoPrimaryAction{} | _]}} =
+                 Ash.destroy(entry, actor: user)
       end
     end
   end
@@ -163,6 +299,41 @@ defmodule Platser.ActivityFeedPropertyTest do
 
         assert fetched != []
         assert Enum.all?(fetched, &(&1.action == :checked_in))
+      end
+    end
+
+    property "updates filter excludes comments and keeps non-comment activity" do
+      check all(
+              comment_count <- StreamData.integer(1..8),
+              update_count <- StreamData.integer(1..8),
+              max_runs: 20
+            ) do
+        {user, event} = create_event_with_member()
+
+        Enum.each(1..comment_count, fn _ ->
+          {:ok, _} = insert_entry(user, event, :comment_added)
+        end)
+
+        Enum.each(1..update_count, fn _ ->
+          {:ok, _} = insert_entry(user, event, :poi_published)
+        end)
+
+        {:ok, fetched} = Activity.list_entries_for_event_with_filter(event.id, user, :updates)
+
+        assert fetched != []
+        refute Enum.any?(fetched, &(&1.action == :comment_added))
+
+        assert Enum.all?(
+                 fetched,
+                 &(&1.action in [
+                     :checked_in,
+                     :entered_geofence,
+                     :exited_geofence,
+                     :poi_published,
+                     :geofence_published,
+                     :joined_event
+                   ])
+               )
       end
     end
   end
