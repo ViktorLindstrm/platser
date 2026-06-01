@@ -12,18 +12,20 @@ defmodule PlatserWeb.MediaController do
   """
   @spec show(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def show(conn, %{"path" => path_parts}) do
-    canonical_path = "/uploads/" <> Enum.join(path_parts, "/")
     actor = conn.assigns[:current_user]
 
-    case Platser.Media.get_attachment_by_path(canonical_path, actor: actor) do
-      {:ok, attachment} ->
-        serve_file(conn, attachment)
+    if is_nil(actor) do
+      send_resp(conn, 403, "Forbidden")
+    else
+      canonical_path = "/uploads/" <> Enum.join(path_parts, "/")
 
-      {:error, %Ash.Error.Forbidden{}} ->
-        send_resp(conn, 403, "Forbidden")
+      case Platser.Media.get_attachment_by_path(canonical_path, actor: actor) do
+        {:ok, attachment} ->
+          serve_file(conn, attachment)
 
-      _ ->
-        send_resp(conn, 404, "Not Found")
+        _ ->
+          send_resp(conn, 404, "Not Found")
+      end
     end
   end
 
