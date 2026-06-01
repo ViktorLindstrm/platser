@@ -59,7 +59,7 @@ defmodule PlatserWeb.Admin.DashboardLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_user} full_width={true}>
-      <div class="min-h-[calc(100vh-3.5rem)] bg-gray-950 text-gray-100">
+      <div id="admin-dashboard" phx-hook=".ForceDark" class="min-h-[calc(100vh-3.5rem)] bg-gray-950 text-gray-100">
         <%!-- Header --%>
         <div class="border-b border-gray-800 bg-gray-900/60 backdrop-blur-sm sticky top-0 z-10">
           <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -239,6 +239,24 @@ defmodule PlatserWeb.Admin.DashboardLive do
           </section>
         </div>
       </div>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".ForceDark">
+        export default {
+          mounted() {
+            this._prev = localStorage.getItem("phx:theme");
+            localStorage.setItem("phx:theme", "dark");
+            document.documentElement.setAttribute("data-theme", "dark");
+          },
+          destroyed() {
+            if (this._prev === null) {
+              localStorage.removeItem("phx:theme");
+              document.documentElement.removeAttribute("data-theme");
+            } else {
+              localStorage.setItem("phx:theme", this._prev);
+              document.documentElement.setAttribute("data-theme", this._prev);
+            }
+          }
+        }
+      </script>
     </Layouts.app>
     """
   end
