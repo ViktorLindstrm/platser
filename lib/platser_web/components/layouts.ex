@@ -35,6 +35,8 @@ defmodule PlatserWeb.Layouts do
     default: nil,
     doc: "the current authenticated user"
 
+  attr :full_width, :boolean, default: false, doc: "when true, removes max-w and padding from main"
+
   slot :inner_block, required: true
 
   def app(assigns) do
@@ -102,7 +104,7 @@ defmodule PlatserWeb.Layouts do
       </div>
     <% end %>
 
-    <main class="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+    <main class={[not @full_width && "max-w-5xl mx-auto px-4 sm:px-6 py-8"]}>
       {render_slot(@inner_block)}
     </main>
 

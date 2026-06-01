@@ -58,8 +58,8 @@ defmodule PlatserWeb.Admin.DashboardLive do
   @impl Phoenix.LiveView
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_user}>
-      <div class="min-h-screen bg-gray-950 text-gray-100">
+    <Layouts.app flash={@flash} current_scope={@current_user} full_width={true}>
+      <div class="min-h-[calc(100vh-3.5rem)] bg-gray-950 text-gray-100">
         <%!-- Header --%>
         <div class="border-b border-gray-800 bg-gray-900/60 backdrop-blur-sm sticky top-0 z-10">
           <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
