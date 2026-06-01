@@ -76,6 +76,23 @@ defmodule PlatserWeb.Router do
     end
   end
 
+  live_session :admin,
+    on_mount: [
+      {AshAuthentication.Phoenix.LiveSession, :default},
+      {PlatserWeb.LiveUserAuth, :live_user_required},
+      {PlatserWeb.LiveUserAuth, :ensure_superuser}
+    ] do
+    scope "/admin", PlatserWeb.Admin do
+      pipe_through :browser
+
+      live "/dashboard", DashboardLive
+    end
+  end
+
+  pipeline :require_superuser do
+    plug PlatserWeb.Plugs.RequireSuperuser
+  end
+
   # Other scopes may use custom stacks.
   # scope "/api", PlatserWeb do
   #   pipe_through :api
@@ -83,11 +100,6 @@ defmodule PlatserWeb.Router do
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:platser, :dev_routes) do
-    # If you want to use the LiveDashboard in production, you should put
-    # it behind authentication and allow only admins to access it.
-    # If your application does not have an admins-only section yet,
-    # you can use Plug.BasicAuth to set up some basic authentication
-    # as long as you are also using SSL (which you should anyway).
     import Phoenix.LiveDashboard.Router
 
     scope "/dev" do
@@ -96,6 +108,14 @@ defmodule PlatserWeb.Router do
       live_dashboard "/dashboard", metrics: PlatserWeb.Telemetry
       live "/simulator", PlatserWeb.Dev.SimulatorLive
       forward "/mailbox", Plug.Swoosh.MailboxPreview
+    end
+  else
+    import Phoenix.LiveDashboard.Router
+
+    scope "/admin" do
+      pipe_through [:browser, :require_superuser]
+
+      live_dashboard "/live_dashboard", metrics: PlatserWeb.Telemetry
     end
   end
 end

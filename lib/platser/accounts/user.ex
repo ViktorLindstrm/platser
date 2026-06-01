@@ -97,6 +97,12 @@ defmodule Platser.Accounts.User do
       validate present(:display_name)
     end
 
+    update :set_superuser do
+      description "Internal: set the superuser flag. Must be called with authorize?: false."
+      require_atomic? false
+      accept [:superuser]
+    end
+
     read :get_by_subject do
       description "Get a user by the subject claim in a JWT"
       argument :subject, :string, allow_nil?: false
@@ -129,6 +135,10 @@ defmodule Platser.Accounts.User do
     policy action(:update_profile) do
       authorize_if expr(id == ^actor(:id))
     end
+
+    policy action(:set_superuser) do
+      forbid_if always()
+    end
   end
 
   attributes do
@@ -138,6 +148,7 @@ defmodule Platser.Accounts.User do
     attribute :hashed_password, :string, allow_nil?: true, sensitive?: true
     attribute :is_simulated, :boolean, default: false, public?: true
     attribute :is_guest, :boolean, default: false, public?: true
+    attribute :superuser, :boolean, default: false, public?: false
   end
 
   identities do

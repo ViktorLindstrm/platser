@@ -30,6 +30,15 @@ admin =
       existing
   end
 
+# Ensure admin is a superuser
+unless admin.superuser do
+  IO.puts("Promoting dev admin to superuser...")
+
+  admin
+  |> Ash.Changeset.for_update(:set_superuser, %{superuser: true})
+  |> Ash.update!(authorize?: false)
+end
+
 event_name = "Dev Event"
 
 event =

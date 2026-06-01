@@ -41,6 +41,13 @@ defmodule PlatserWeb.LiveUserAuth do
     end
   end
 
+  def on_mount(:ensure_superuser, _params, _session, socket) do
+    case socket.assigns[:current_user] do
+      %{superuser: true} -> {:cont, socket}
+      _ -> {:halt, Phoenix.LiveView.redirect(socket, to: ~p"/sign-in")}
+    end
+  end
+
   @spec get_current_user(map()) :: Platser.Accounts.User.t() | nil
   defp get_current_user(_session), do: nil
 end

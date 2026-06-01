@@ -124,6 +124,8 @@ defmodule Platser.Events.Event do
       allow_nil? false
       default false
     end
+
+    create_timestamp :inserted_at
   end
 
   relationships do

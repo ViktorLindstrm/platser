@@ -15,8 +15,7 @@ defmodule Platser.Application do
       {DNSCluster, query: Application.get_env(:platser, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Platser.PubSub},
       Platser.EventPresence,
-      # Start a worker by calling: Platser.Worker.start_link(arg)
-      # {Platser.Worker, arg},
+      Platser.Admin.ErrorBuffer,
       # Start to serve requests, typically the last entry
       PlatserWeb.Endpoint,
       {AshAuthentication.Supervisor, [otp_app: :platser]}
