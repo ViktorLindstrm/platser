@@ -109,6 +109,100 @@ defmodule Platser.Admin.Stats do
     )
   end
 
+  @doc "Returns up to 100 detail records for the given platform total key."
+  @spec detail_rows(String.t()) :: [map()]
+  def detail_rows("users") do
+    Repo.all(
+      from u in "users",
+        select: %{
+          email: u.email,
+          display_name: u.display_name,
+          is_guest: u.is_guest,
+          superuser: u.superuser
+        },
+        order_by: [asc: u.email],
+        limit: 100
+    )
+  end
+
+  def detail_rows("registered") do
+    Repo.all(
+      from u in "users",
+        where: u.is_guest == false,
+        select: %{
+          email: u.email,
+          display_name: u.display_name,
+          is_guest: u.is_guest,
+          superuser: u.superuser
+        },
+        order_by: [asc: u.email],
+        limit: 100
+    )
+  end
+
+  def detail_rows("events") do
+    Repo.all(
+      from e in "events",
+        select: %{name: e.name, starts_at: e.starts_at, ends_at: e.ends_at, inserted_at: e.inserted_at},
+        order_by: [desc: e.inserted_at],
+        limit: 100
+    )
+  end
+
+  def detail_rows("memberships") do
+    Repo.all(
+      from m in "memberships",
+        join: e in "events", on: e.id == m.event_id,
+        left_join: u in "users", on: u.id == m.user_id,
+        select: %{role: m.role, joined_at: m.joined_at, event_name: e.name, user_email: u.email},
+        order_by: [desc: m.joined_at],
+        limit: 100
+    )
+  end
+
+  def detail_rows("pois") do
+    Repo.all(
+      from p in "pois",
+        select: %{name: p.name, category: p.category, visibility: p.visibility},
+        order_by: [asc: p.name],
+        limit: 100
+    )
+  end
+
+  def detail_rows("geofences") do
+    Repo.all(
+      from g in "geofences",
+        select: %{name: g.name, purpose: g.purpose, visibility: g.visibility},
+        order_by: [asc: g.name],
+        limit: 100
+    )
+  end
+
+  def detail_rows("attachments") do
+    Repo.all(
+      from a in "media_attachments",
+        select: %{filename: a.filename, content_type: a.content_type, inserted_at: a.inserted_at},
+        order_by: [desc: a.inserted_at],
+        limit: 100
+    )
+  end
+
+  def detail_rows("activity_entries") do
+    Repo.all(
+      from e in "entries",
+        select: %{
+          action: e.action,
+          subject_type: e.subject_type,
+          message: e.message,
+          inserted_at: e.inserted_at
+        },
+        order_by: [desc: e.inserted_at],
+        limit: 100
+    )
+  end
+
+  def detail_rows(_), do: []
+
   @doc "Returns current BEAM VM statistics."
   @spec vm_stats() :: vm_stats()
   def vm_stats do
