@@ -92,6 +92,7 @@ defmodule Platser.Accounts.Token do
     attribute :subject, :string do
       allow_nil? false
       public? true
+      sensitive? true
     end
 
     attribute :expires_at, :utc_datetime do

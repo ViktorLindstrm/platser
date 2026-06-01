@@ -115,6 +115,7 @@ defmodule Platser.Events.Event do
 
     attribute :join_code, :string do
       allow_nil? false
+      sensitive? true
     end
 
     attribute :bounds, Platser.Types.Geometry

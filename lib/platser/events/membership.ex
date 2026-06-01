@@ -22,7 +22,7 @@ defmodule Platser.Events.Membership do
 
     create :join do
       description "Join an event via its invite join code."
-      argument :join_code, :string, allow_nil?: false
+      argument :join_code, :string, allow_nil?: false, sensitive?: true
       change set_attribute(:role, :member)
       change relate_actor(:user)
       change Platser.Events.Changes.SetEventByJoinCode

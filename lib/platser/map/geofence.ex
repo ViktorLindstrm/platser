@@ -178,7 +178,7 @@ defmodule Platser.Map.Geofence do
 
     attribute :published_at, :utc_datetime
     attribute :description, :string
-    attribute :comment, :string
+    attribute :comment, :string, sensitive?: true
   end
 
   relationships do

@@ -121,7 +121,7 @@ defmodule Platser.Map.Poi do
 
     attribute :description, :string
 
-    attribute :comment, :string
+    attribute :comment, :string, sensitive?: true
 
     attribute :color, :string, default: "#3B82F6"
 

@@ -21,7 +21,15 @@ defmodule Platser.Activity.Entry do
 
     read :list_by_subject do
       argument :subject_id, :uuid, allow_nil?: false
-      filter expr(subject_id == ^arg(:subject_id))
+      argument :subject_type, :string, allow_nil?: false
+      argument :event_id, :uuid, allow_nil?: false
+
+      filter expr(
+               subject_id == ^arg(:subject_id) and
+                 subject_type == ^arg(:subject_type) and
+                 event_id == ^arg(:event_id)
+             )
+
       prepare build(sort: [inserted_at: :desc], limit: 20)
     end
 
@@ -55,7 +63,7 @@ defmodule Platser.Activity.Entry do
     end
 
     policy action_type(:create) do
-      authorize_if actor_present()
+      authorize_if expr(exists(event.memberships, user_id == ^actor(:id)))
     end
   end
 
@@ -90,10 +98,12 @@ defmodule Platser.Activity.Entry do
 
     attribute :lat, :float do
       allow_nil? true
+      sensitive? true
     end
 
     attribute :lng, :float do
       allow_nil? true
+      sensitive? true
     end
 
     create_timestamp :inserted_at

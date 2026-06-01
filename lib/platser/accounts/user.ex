@@ -133,7 +133,7 @@ defmodule Platser.Accounts.User do
 
   attributes do
     uuid_primary_key :id
-    attribute :email, :ci_string, allow_nil?: false, public?: true
+    attribute :email, :ci_string, allow_nil?: false, public?: true, sensitive?: true
     attribute :display_name, :string, allow_nil?: false, public?: true
     attribute :hashed_password, :string, allow_nil?: true, sensitive?: true
     attribute :is_simulated, :boolean, default: false, public?: true
