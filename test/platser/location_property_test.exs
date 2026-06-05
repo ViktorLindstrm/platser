@@ -26,6 +26,7 @@ defmodule Platser.LocationPropertyTest do
           {lng, lat},
           {lng + size, lat},
           {lng + size, lat + size},
+          {lng, lat + size},
           {lng, lat}
         ]
 

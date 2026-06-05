@@ -106,7 +106,7 @@ defmodule Platser.Location do
     |> append_boundary_id(boundary_ids)
     |> Enum.uniq()
   rescue
-    _error in [Postgrex.Error] ->
+    _error in [Postgrex.Error, DBConnection.ConnectionError] ->
       manual_geofences_containing(event_id, lat, lng)
   end
 
@@ -118,7 +118,7 @@ defmodule Platser.Location do
   def in_event_boundary?(event_id, %{lat: lat, lng: lng}) do
     boundary_geofence_id(event_id, lat, lng) != nil
   rescue
-    _error in [Postgrex.Error] ->
+    _error in [Postgrex.Error, DBConnection.ConnectionError] ->
       manual_boundary_geofence_id(event_id, lat, lng) != nil
   end
 
