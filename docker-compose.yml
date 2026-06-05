@@ -10,7 +10,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U forge -d platser_prod"]
+      test: ["CMD-SHELL", "pg_isready -U platser -d platser_prod"]
       interval: 5s
       timeout: 5s
       retries: 10
