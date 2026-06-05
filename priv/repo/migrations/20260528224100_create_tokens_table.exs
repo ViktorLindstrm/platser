@@ -8,7 +8,8 @@ defmodule Platser.Repo.Migrations.CreateTokensTable do
       add :purpose, :string, null: false
       add :expires_at, :utc_datetime, null: false
       add :extra_data, :map
-      timestamps(type: :utc_datetime, default: fragment("now()"))
+      add :created_at, :utc_datetime, null: false, default: fragment("now()")
+      add :updated_at, :utc_datetime, null: false, default: fragment("now()")
     end
 
     create index(:tokens, [:subject])
