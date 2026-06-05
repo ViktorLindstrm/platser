@@ -143,7 +143,12 @@ defmodule Platser.Admin.Stats do
   def detail_rows("events") do
     Repo.all(
       from e in "events",
-        select: %{name: e.name, starts_at: e.starts_at, ends_at: e.ends_at, inserted_at: e.inserted_at},
+        select: %{
+          name: e.name,
+          starts_at: e.starts_at,
+          ends_at: e.ends_at,
+          inserted_at: e.inserted_at
+        },
         order_by: [desc: e.inserted_at],
         limit: 100
     )
@@ -152,8 +157,10 @@ defmodule Platser.Admin.Stats do
   def detail_rows("memberships") do
     Repo.all(
       from m in "memberships",
-        join: e in "events", on: e.id == m.event_id,
-        left_join: u in "users", on: u.id == m.user_id,
+        join: e in "events",
+        on: e.id == m.event_id,
+        left_join: u in "users",
+        on: u.id == m.user_id,
         select: %{role: m.role, joined_at: m.joined_at, event_name: e.name, user_email: u.email},
         order_by: [desc: m.joined_at],
         limit: 100

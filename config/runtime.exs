@@ -20,7 +20,8 @@ if System.get_env("PHX_SERVER") do
   config :platser, PlatserWeb.Endpoint, server: true
 end
 
-config :platser, PlatserWeb.Endpoint, http: [port: String.to_integer(System.get_env("PORT", "4000"))]
+config :platser, PlatserWeb.Endpoint,
+  http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
 if config_env() == :prod do
   database_url =
@@ -64,7 +65,6 @@ if config_env() == :prod do
       true -> [port: port]
     end
 
-
   config :platser, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   extra_hosts =
@@ -75,7 +75,6 @@ if config_env() == :prod do
   allowed_origins =
     (["//#{host}"] ++ Enum.map(extra_hosts, &"//#{&1}"))
     |> Enum.uniq()
-
 
   config :platser, PlatserWeb.Endpoint,
     url: [host: host, scheme: scheme] ++ url_port,

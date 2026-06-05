@@ -35,7 +35,9 @@ defmodule PlatserWeb.Layouts do
     default: nil,
     doc: "the current authenticated user"
 
-  attr :full_width, :boolean, default: false, doc: "when true, removes max-w and padding from main"
+  attr :full_width, :boolean,
+    default: false,
+    doc: "when true, removes max-w and padding from main"
 
   slot :inner_block, required: true
 

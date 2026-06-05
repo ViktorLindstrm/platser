@@ -71,7 +71,11 @@ defmodule PlatserWeb.Admin.DashboardLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_user} full_width={true}>
-      <div id="admin-dashboard" phx-hook=".ForceDark" class="min-h-[calc(100vh-3.5rem)] bg-gray-950 text-gray-100">
+      <div
+        id="admin-dashboard"
+        phx-hook=".ForceDark"
+        class="min-h-[calc(100vh-3.5rem)] bg-gray-950 text-gray-100"
+      >
         <%!-- Header --%>
         <div class="border-b border-gray-800 bg-gray-900/60 backdrop-blur-sm sticky top-0 z-10">
           <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -319,7 +323,10 @@ defmodule PlatserWeb.Admin.DashboardLive do
         <.icon
           :if={@click_key}
           name="hero-chevron-down"
-          class={["w-3.5 h-3.5 text-gray-600 transition-transform duration-200", @selected && "rotate-180"]}
+          class={[
+            "w-3.5 h-3.5 text-gray-600 transition-transform duration-200",
+            @selected && "rotate-180"
+          ]}
         />
       </div>
       <div class="text-2xl font-bold text-white tabular-nums">{@value}</div>
@@ -429,9 +436,15 @@ defmodule PlatserWeb.Admin.DashboardLive do
             <%= for row <- @data do %>
               <tr class="hover:bg-gray-800/30 transition-colors">
                 <td class="px-4 py-2 text-gray-200 text-xs font-medium">{row.name}</td>
-                <td class="px-4 py-2 text-gray-400 text-xs font-mono">{format_short_dt(row.starts_at)}</td>
-                <td class="px-4 py-2 text-gray-400 text-xs font-mono">{format_short_dt(row.ends_at)}</td>
-                <td class="px-4 py-2 text-gray-500 text-xs font-mono">{format_short_dt(row.inserted_at)}</td>
+                <td class="px-4 py-2 text-gray-400 text-xs font-mono">
+                  {format_short_dt(row.starts_at)}
+                </td>
+                <td class="px-4 py-2 text-gray-400 text-xs font-mono">
+                  {format_short_dt(row.ends_at)}
+                </td>
+                <td class="px-4 py-2 text-gray-500 text-xs font-mono">
+                  {format_short_dt(row.inserted_at)}
+                </td>
               </tr>
             <% end %>
           </tbody>
@@ -462,7 +475,9 @@ defmodule PlatserWeb.Admin.DashboardLive do
                     {row.role}
                   </span>
                 </td>
-                <td class="px-4 py-2 text-gray-500 text-xs font-mono">{format_short_dt(row.joined_at)}</td>
+                <td class="px-4 py-2 text-gray-500 text-xs font-mono">
+                  {format_short_dt(row.joined_at)}
+                </td>
               </tr>
             <% end %>
           </tbody>
@@ -531,7 +546,9 @@ defmodule PlatserWeb.Admin.DashboardLive do
               <tr class="hover:bg-gray-800/30 transition-colors">
                 <td class="px-4 py-2 text-gray-200 text-xs font-mono">{row.filename}</td>
                 <td class="px-4 py-2 text-gray-400 text-xs">{row.content_type}</td>
-                <td class="px-4 py-2 text-gray-500 text-xs font-mono">{format_short_dt(row.inserted_at)}</td>
+                <td class="px-4 py-2 text-gray-500 text-xs font-mono">
+                  {format_short_dt(row.inserted_at)}
+                </td>
               </tr>
             <% end %>
           </tbody>
@@ -564,7 +581,9 @@ defmodule PlatserWeb.Admin.DashboardLive do
                 <td class="px-4 py-2 text-gray-400 text-xs truncate max-w-xs">
                   {String.slice(to_string(row.message), 0, 80)}
                 </td>
-                <td class="px-4 py-2 text-gray-500 text-xs font-mono">{format_short_dt(row.inserted_at)}</td>
+                <td class="px-4 py-2 text-gray-500 text-xs font-mono">
+                  {format_short_dt(row.inserted_at)}
+                </td>
               </tr>
             <% end %>
           </tbody>
