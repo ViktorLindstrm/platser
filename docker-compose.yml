@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgis:18-3.6-alpine
+    
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: platser
+      POSTGRES_PASSWORD: platser
+      POSTGRES_DB: platser_prod
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forge -d platser_prod"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    image: ghcr.io/viktorlindstrm/platser:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "5000:4000"
+    environment:
+      PHX_SERVER: "true"
+      PHX_HOST: "platser.lan"
+      PHX_EXTRA_HOSTS: "localhost"
+      PORT: "4000"
+      DATABASE_URL: "ecto://platser:platser@db/platser_prod"
+      POOL_SIZE: "10"
+
+volumes:
+  postgres_data:
