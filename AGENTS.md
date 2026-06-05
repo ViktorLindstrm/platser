@@ -15,7 +15,7 @@ This is a web application written using the Phoenix web framework Using Ash 3.0 
 ### Ash 3.0
 - Always utilize Ash 3.0 when possible.
 
-### Elixir 1.20 typing (see ADR-0006)
+### Elixir 1.20 typing 
 
 - Use the **Elixir 1.20 native type system** — no Dialyzer
 - The quality gate is `mix compile --warnings-as-errors`; T-category type warnings are compile errors
@@ -26,7 +26,7 @@ This is a web application written using the Phoenix web framework Using Ash 3.0 
 - **Never add `dialyxir` or run `mix dialyzer`** — it is not part of this project's quality gates
 
 ### Igniter (code generation & installation)
-- **Prefer Igniter-backed tasks** over manual file edits or plain Phoenix generators (see ADR-0008).
+- **Prefer Igniter-backed tasks** over manual file edits or plain Phoenix generators 
 - Use `mix igniter.install <package>` to add and configure dependencies.
 - Use `mix ash.gen.resource`, `mix ash.gen.domain`, and other `ash.gen.*` tasks to generate Ash resources and domains.
 - Use `mix ash_authentication.install` and similar extension installers for auth/authorization features.

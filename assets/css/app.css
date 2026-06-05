@@ -2,9 +2,11 @@
    https://tailwindcss.com/docs/configuration */
 
 @import "tailwindcss" source(none);
+@import "maplibre-gl/dist/maplibre-gl.css";
 @source "../css";
 @source "../js";
 @source "../../lib/platser_web";
+@source "../../deps/ash_authentication_phoenix/lib";
 
 /* A Tailwind plugin that makes "hero-#{ICON}" classes available.
    The heroicons installation itself is managed by your mix.exs */
@@ -102,4 +104,36 @@
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
+/* Activity feed entry slide+fade animation */
+@keyframes activity-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.activity-entry {
+  animation: activity-slide-in 0.25s ease-out forwards;
+}
+
 /* This file is for your main application CSS */
+
+/* Map item hover tooltip */
+.poi-hover-popup .maplibregl-popup-content {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2937;
+  background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+}
+
+.poi-hover-popup .maplibregl-popup-tip {
+  display: none;
+}

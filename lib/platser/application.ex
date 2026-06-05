@@ -5,6 +5,8 @@ defmodule Platser.Application do
 
   use Application
 
+  @start_gps_simulator Application.compile_env(:platser, :start_gps_simulator, false)
+
   @impl true
   def start(_type, _args) do
     children = [
@@ -12,8 +14,8 @@ defmodule Platser.Application do
       Platser.Repo,
       {DNSCluster, query: Application.get_env(:platser, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Platser.PubSub},
-      # Start a worker by calling: Platser.Worker.start_link(arg)
-      # {Platser.Worker, arg},
+      Platser.EventPresence,
+      Platser.Admin.ErrorBuffer,
       # Start to serve requests, typically the last entry
       PlatserWeb.Endpoint,
       {AshAuthentication.Supervisor, [otp_app: :platser]}
@@ -21,6 +23,13 @@ defmodule Platser.Application do
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
+    children =
+      if @start_gps_simulator do
+        children ++ [{Platser.Dev.GpsSimulator, []}]
+      else
+        children
+      end
+
     opts = [strategy: :one_for_one, name: Platser.Supervisor]
     Supervisor.start_link(children, opts)
   end

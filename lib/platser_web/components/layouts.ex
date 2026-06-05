@@ -31,41 +31,81 @@ defmodule PlatserWeb.Layouts do
     default: nil,
     doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
 
+  attr :current_user, :map,
+    default: nil,
+    doc: "the current authenticated user"
+
+  attr :full_width, :boolean, default: false, doc: "when true, removes max-w and padding from main"
+
   slot :inner_block, required: true
 
   def app(assigns) do
     ~H"""
-    <header class="navbar px-4 sm:px-6 lg:px-8">
-      <div class="flex-1">
-        <a href="/" class="flex-1 flex w-fit items-center gap-2">
-          <img src={~p"/images/logo.svg"} width="36" />
-          <span class="text-sm font-semibold">v{Application.spec(:phoenix, :vsn)}</span>
-        </a>
-      </div>
-      <div class="flex-none">
-        <ul class="flex flex-column px-1 space-x-4 items-center">
-          <li>
-            <a href="https://phoenixframework.org/" class="btn btn-ghost">Website</a>
-          </li>
-          <li>
-            <a href="https://github.com/phoenixframework/phoenix" class="btn btn-ghost">GitHub</a>
-          </li>
-          <li>
-            <.theme_toggle />
-          </li>
-          <li>
-            <a href="https://hexdocs.pm/phoenix/overview.html" class="btn btn-primary">
-              Get Started <span aria-hidden="true">&rarr;</span>
-            </a>
-          </li>
-        </ul>
+    <header class="sticky top-0 z-30 bg-base-100/80 backdrop-blur-md border-b border-base-200">
+      <div class="max-w-5xl mx-auto px-4 sm:px-6 flex items-center justify-between h-14">
+        <.link navigate={~p"/"} class="flex items-center gap-2 font-bold text-base-content">
+          <.icon name="hero-map-pin" class="w-5 h-5 text-primary" />
+          <span class="text-base">Platser</span>
+        </.link>
+        <div class="flex items-center gap-3">
+          <.theme_toggle />
+          <%= if @current_scope do %>
+            <.link
+              navigate={~p"/events"}
+              class="text-sm text-base-content/70 hover:text-base-content transition-colors"
+            >
+              My Events
+            </.link>
+            <%= if !Map.get(@current_scope, :is_guest, false) do %>
+              <.link
+                navigate={~p"/profile"}
+                class="text-sm text-base-content/70 hover:text-base-content transition-colors"
+              >
+                Profile
+              </.link>
+            <% end %>
+            <%= if Map.get(@current_scope, :is_guest, false) do %>
+              <.link
+                navigate={~p"/upgrade"}
+                class="inline-flex items-center gap-1.5 text-sm font-medium text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 transition-colors"
+              >
+                <.icon name="hero-user-plus" class="w-4 h-4" /> Create Account
+              </.link>
+            <% end %>
+            <.link
+              href={~p"/sign-out"}
+              method="delete"
+              class="text-sm text-base-content/70 hover:text-base-content transition-colors"
+            >
+              Sign out
+            </.link>
+          <% end %>
+        </div>
       </div>
     </header>
 
-    <main class="px-4 py-20 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-2xl space-y-4">
-        {render_slot(@inner_block)}
+    <%= if @current_scope && Map.get(@current_scope, :is_guest, false) do %>
+      <div class="bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800">
+        <div class="max-w-5xl mx-auto px-4 sm:px-6 py-2 flex items-center justify-between gap-4">
+          <div class="flex items-center gap-2 text-sm text-amber-800 dark:text-amber-300">
+            <.icon name="hero-information-circle" class="w-4 h-4 shrink-0" />
+            <span>
+              You're browsing as a guest. <strong>Your data may be lost</strong>
+              if you close this browser.
+            </span>
+          </div>
+          <.link
+            navigate={~p"/upgrade"}
+            class="shrink-0 text-sm font-semibold text-amber-700 dark:text-amber-300 underline hover:no-underline transition-all"
+          >
+            Save my account →
+          </.link>
+        </div>
       </div>
+    <% end %>
+
+    <main class={[not @full_width && "max-w-5xl mx-auto px-4 sm:px-6 py-8"]}>
+      {render_slot(@inner_block)}
     </main>
 
     <.flash_group flash={@flash} />

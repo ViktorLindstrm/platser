@@ -1,12 +1,21 @@
 import Config
 config :ash, policies: [show_policy_breakdowns?: true]
 
+# Map tile source for development.
+# Supports PMTiles vector tiles (pmtiles://...) or raster tile templates ({z}/{x}/{y}).
+# For vector tiles, download a regional extract from https://protomaps.com/builds.
+# The OSM raster fallback below works without any downloads.
+config :platser,
+       :pmtiles_url,
+       "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+
 # Configure your database
 config :platser, Platser.Repo,
   username: "postgres",
   password: "postgres",
   hostname: "localhost",
   database: "platser_dev",
+  types: Platser.PostgresTypes,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10
@@ -70,6 +79,9 @@ config :platser, PlatserWeb.Endpoint,
 
 # Enable dev routes for dashboard and mailbox
 config :platser, dev_routes: true, token_signing_secret: "dWl+pCLneJ/+Yu5BWWiSBHtMPLaC0j/C"
+
+# Start the GPS simulator in dev
+config :platser, start_gps_simulator: true
 
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
