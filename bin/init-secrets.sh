@@ -8,7 +8,7 @@ if [ -f "$ENV_FILE" ] && grep -q "^SECRET_KEY_BASE=" "$ENV_FILE"; then
   exit 0
 fi
 
-SECRET=$(docker run --rm ghcr.io/viktorlindstrm/forge:latest eval \
+SECRET=$(docker run --rm ghcr.io/viktorlindstrm/platser:latest eval \
   "IO.puts(:crypto.strong_rand_bytes(48) |> Base.encode64())" 2>/dev/null | tr -d '\r\n')
 
 if [ -z "$SECRET" ]; then
