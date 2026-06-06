@@ -26,13 +26,12 @@ COPY config/config.exs config/prod.exs config/
 RUN mix deps.compile
 
 COPY assets assets
-COPY deps deps
 COPY priv priv
 COPY lib lib
 RUN cd assets && npm ci
+RUN mix compile
 RUN mix assets.deploy
 
-RUN mix compile
 
 COPY config/runtime.exs config/
 
