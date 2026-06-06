@@ -28,7 +28,7 @@ RUN mix deps.compile
 COPY assets assets
 COPY priv priv
 COPY lib lib
-
+RUN cd assets && npm ci
 RUN mix assets.deploy
 
 RUN mix compile
