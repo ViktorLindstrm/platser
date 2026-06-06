@@ -25,6 +25,7 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/platser"
 import MapHook from "./hooks/map_hook"
 import topbar from "../vendor/topbar"
+import "maplibre-gl/dist/maplibre-gl.css"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
