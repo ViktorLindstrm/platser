@@ -55,7 +55,7 @@ WORKDIR /app
 
 RUN chown nobody /app
 
-COPY --from=builder --chown=nobody:root /app/_build/prod/rel/forge ./
+COPY --from=builder --chown=nobody:root /app/_build/prod/rel/platser ./
 
 COPY --chown=nobody:root bin/docker-entrypoint.sh ./bin/
 
