@@ -9,7 +9,7 @@ ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
 FROM ${BUILDER_IMAGE} AS builder
 
 RUN apt-get update -y && \
-    apt-get install -y build-essential git curl && \
+    apt-get install -y build-essential git curl nodejs npm && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
