@@ -79,6 +79,7 @@ defmodule PlatserWeb.AuthOverrides do
     set :root_class, "mt-2 mb-2"
     set :interstitial_class, "flex flex-row justify-between text-sm font-medium mt-3"
     set :toggler_class, "text-primary hover:text-primary/80 transition-colors"
+    set :register_extra_component, &PlatserWeb.AuthComponents.register_extra/1
     set :sign_in_toggle_text, "Already have an account?"
     set :register_toggle_text, "Need an account?"
     set :reset_toggle_text, "Forgot your password?"

@@ -16,6 +16,7 @@ defmodule Platser.Accounts.User do
       password :password do
         hashed_password_field :hashed_password
         identity_field :email
+        register_action_accept [:display_name]
       end
     end
 
