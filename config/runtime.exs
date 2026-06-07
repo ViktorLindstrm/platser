@@ -85,7 +85,4 @@ if config_env() == :prod do
     secret_key_base: secret_key_base
 
   config :platser, token_signing_secret: secret_key_base
-
-
-
 end
