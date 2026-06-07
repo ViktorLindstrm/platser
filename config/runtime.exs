@@ -83,4 +83,9 @@ if config_env() == :prod do
     ],
     check_origin: allowed_origins,
     secret_key_base: secret_key_base
+
+  config :platser, token_signing_secret: secret_key_base
+
+
+
 end
