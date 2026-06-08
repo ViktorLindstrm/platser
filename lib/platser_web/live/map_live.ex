@@ -13,11 +13,7 @@ defmodule PlatserWeb.MapLive do
   alias Platser.Media.Attachment
   alias PlatserWeb.MapInspection
 
-  @pmtiles_url Application.compile_env(
-                 :platser,
-                 :pmtiles_url,
-                 "pmtiles://https://r2-public.protomaps.com/protomaps-sample-datasets/nz.pmtiles"
-               )
+  @default_map_url "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 
   @poi_categories [:viewpoint, :camp, :hazard, :meeting_point, :food, :other]
   @poi_default_color "#3B82F6"
@@ -88,7 +84,7 @@ defmodule PlatserWeb.MapLive do
             |> stream(:selected_map_object_entries, [])
             |> assign(:unread_count, 0)
             |> assign(:drawer_open, false)
-            |> assign(:pmtiles_url, @pmtiles_url)
+            |> assign(:pmtiles_url, map_tile_url())
             |> assign(:poi_step, :idle)
             |> assign(:poi_location, nil)
             |> assign(:poi_name, "")
@@ -438,6 +434,10 @@ defmodule PlatserWeb.MapLive do
 
   def handle_event("check_in_error", %{"message" => message}, socket) do
     {:noreply, put_flash(socket, :error, message)}
+  end
+
+  def handle_event("location_error", %{"message" => message}, socket) do
+    {:noreply, socket |> assign(:sharing?, false) |> put_flash(:error, message)}
   end
 
   def handle_event(
@@ -1627,6 +1627,11 @@ defmodule PlatserWeb.MapLive do
     |> then(fn errs ->
       if is_nil(geometry), do: [{"geometry", "draw a polygon on the map"} | errs], else: errs
     end)
+  end
+
+  @spec map_tile_url() :: String.t()
+  defp map_tile_url do
+    Application.get_env(:platser, :pmtiles_url, @default_map_url)
   end
 
   @impl Phoenix.LiveView

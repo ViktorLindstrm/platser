@@ -52,6 +52,10 @@ config :platser,
   generators: [timestamp_type: :utc_datetime],
   ash_domains: [Platser.Activity, Platser.Media, Platser.Map, Platser.Events, Platser.Accounts]
 
+config :platser,
+       :pmtiles_url,
+       "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+
 # Configure the endpoint
 config :platser, PlatserWeb.Endpoint,
   url: [host: "localhost"],
