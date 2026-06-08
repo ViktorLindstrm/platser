@@ -5,11 +5,7 @@ defmodule PlatserWeb.Dev.SimulatorLive do
   alias Platser.Dev.GpsSimulator
   alias Platser.Events.Event
 
-  @pmtiles_url Application.compile_env(
-                 :platser,
-                 :pmtiles_url,
-                 "pmtiles://https://r2-public.protomaps.com/protomaps-sample-datasets/nz.pmtiles"
-               )
+  @default_map_url "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 
   @patterns [:stationary, :linear, :random_walk, :route]
 
@@ -25,7 +21,7 @@ defmodule PlatserWeb.Dev.SimulatorLive do
       |> assign(:page_title, "GPS Simulator")
       |> assign(:simulator, state)
       |> assign(:patterns, @patterns)
-      |> assign(:pmtiles_url, @pmtiles_url)
+      |> assign(:pmtiles_url, map_tile_url())
       |> assign(:events, events)
       |> assign(
         :form,
@@ -102,6 +98,11 @@ defmodule PlatserWeb.Dev.SimulatorLive do
       {:error, reason} ->
         {:noreply, assign(socket, :error, error_message(reason))}
     end
+  end
+
+  @spec map_tile_url() :: String.t()
+  defp map_tile_url do
+    Application.get_env(:platser, :pmtiles_url, @default_map_url)
   end
 
   @impl true

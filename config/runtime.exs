@@ -67,6 +67,10 @@ if config_env() == :prod do
 
   config :platser, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
+  config :platser,
+         :pmtiles_url,
+         System.get_env("PLATSER_MAP_URL", "https://tile.openstreetmap.org/{z}/{x}/{y}.png")
+
   extra_hosts =
     System.get_env("PHX_EXTRA_HOSTS", "")
     |> String.split(",", trim: true)

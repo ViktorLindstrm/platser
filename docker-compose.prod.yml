@@ -28,3 +28,4 @@ services:
       PORT: "4000"
       DATABASE_URL: "ecto://platser:platser@db/platser_prod"
       POOL_SIZE: "10"
+      PLATSER_MAP_URL: "https://tile.openstreetmap.org/{z}/{x}/{y}.png"

@@ -730,11 +730,22 @@ export default {
     if (source) source.setData(data)
   },
 
-  _requestCheckIn() {
+  _geolocationUnavailableMessage(action) {
     if (!navigator.geolocation) {
-      this.pushEvent("check_in_error", {
-        message: "Your browser does not support location check-ins.",
-      })
+      return `Your browser does not support location ${action}.`
+    }
+
+    if (!window.isSecureContext) {
+      return `Location ${action} requires HTTPS or localhost.`
+    }
+
+    return null
+  },
+
+  _requestCheckIn() {
+    const unavailableMessage = this._geolocationUnavailableMessage("check-ins")
+    if (unavailableMessage) {
+      this.pushEvent("check_in_error", {message: unavailableMessage})
       return
     }
 
@@ -824,7 +835,11 @@ export default {
   // ---------------------------------------------------------------------------
 
   _startGeolocation() {
-    if (!navigator.geolocation) return
+    const unavailableMessage = this._geolocationUnavailableMessage("sharing")
+    if (unavailableMessage) {
+      this.pushEvent("location_error", {message: unavailableMessage})
+      return
+    }
     if (this.watchId !== null) return
 
     this.watchId = navigator.geolocation.watchPosition(
