@@ -8,6 +8,11 @@ defmodule PlatserWeb.MapLiveTest do
   alias Platser.Map, as: PlatserMap
   alias Platser.Media
 
+  setup do
+    Req.Test.verify_on_exit!(Platser.Map.Search.Geocoder)
+    :ok
+  end
+
   defp create_user(tag) do
     n = System.unique_integer([:positive])
 
@@ -65,8 +70,12 @@ defmodule PlatserWeb.MapLiveTest do
   end
 
   defp create_poi(user, event) do
-    {:ok, poi} =
-      PlatserMap.create_poi(
+    create_poi(user, event, %{})
+  end
+
+  defp create_poi(user, event, attrs) do
+    params =
+      Map.merge(
         %{
           name: "Inspection POI",
           description: "A draft POI for inspection",
@@ -74,6 +83,12 @@ defmodule PlatserWeb.MapLiveTest do
           location: %Geo.Point{coordinates: {174.7633, -36.8485}, srid: 4326},
           event_id: event.id
         },
+        attrs
+      )
+
+    {:ok, poi} =
+      PlatserMap.create_poi(
+        params,
         actor: user
       )
 
@@ -139,6 +154,116 @@ defmodule PlatserWeb.MapLiveTest do
       )
 
     entry
+  end
+
+  describe "map search UI (task #78)" do
+    test "renders the search form at the top of the map", %{conn: conn} do
+      user = create_user("search_render")
+      event = create_event(user)
+      conn = sign_in_conn(conn, user)
+
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      assert has_element?(view, "#map-search-panel")
+      assert has_element?(view, "#map-search-form")
+      assert has_element?(view, "#map-search-input")
+      assert has_element?(view, "#map-search-submit")
+      assert has_element?(view, "#map-search-collapse-toggle")
+      refute has_element?(view, "#map-search-results")
+    end
+
+    test "search shows internal and external results with source labels", %{conn: conn} do
+      user = create_user("search_results")
+      event = create_event(user)
+
+      poi =
+        create_poi(user, event, %{
+          name: "North Camp",
+          description: "Sheltered forest camp",
+          category: :camp,
+          location: %Geo.Point{coordinates: {18.0, 59.0}, srid: 4326}
+        })
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 321,
+            "lat" => "59.3293",
+            "lon" => "18.0686",
+            "name" => "Central Camp",
+            "display_name" => "Central Camp, Stockholm, Sweden",
+            "class" => "tourism",
+            "type" => "camp_site"
+          }
+        ])
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "camp"}
+      })
+
+      assert has_element?(view, "#map-search-results")
+      assert has_element?(view, "#map-search-result-internal-poi-#{poi.id}", "Event POI")
+      assert has_element?(view, "#map-search-result-external-nominatim-321", "OpenStreetMap")
+    end
+
+    test "search shows a clear no-results state", %{conn: conn} do
+      user = create_user("search_empty")
+      event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [])
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "not a real place"}
+      })
+
+      assert has_element?(view, "#map-search-results")
+      assert has_element?(view, "#map-search-no-results")
+    end
+
+    test "search failures show an error flash", %{conn: conn} do
+      user = create_user("search_error")
+      event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Plug.Conn.send_resp(conn, 429, "too many requests")
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "limited place"}
+      })
+
+      assert has_element?(view, "#flash-error", "Map search is busy. Try again soon.")
+    end
+
+    test "search can be collapsed and expanded", %{conn: conn} do
+      user = create_user("search_collapse")
+      event = create_event(user)
+      conn = sign_in_conn(conn, user)
+
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_click(element(view, "#map-search-collapse-toggle"))
+
+      refute has_element?(view, "#map-search-form")
+      assert has_element?(view, "#map-search-expand-toggle")
+
+      render_click(element(view, "#map-search-expand-toggle"))
+
+      assert has_element?(view, "#map-search-form")
+      refute has_element?(view, "#map-search-expand-toggle")
+    end
   end
 
   test "opens a POI inspection drawer and supports publish", %{conn: conn} do
