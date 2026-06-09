@@ -140,8 +140,12 @@ Selecting a search result sends one normalized result selection to the map hook.
 
 - The hook renders one temporary marker outside the persisted POI GeoJSON source.
 - Selecting a different result replaces the previous temporary pin.
-- Clearing/collapsing search, cancelling POI creation, creating a POI, or leaving the LiveView
-  clears the temporary pin.
+- Clearing the search input or collapsing/minimizing the search control clears only search
+  input/results viewport state; it does not clear the temporary pin.
+- The temporary pin has its own explicit close control. Activating it clears the temporary
+  marker and pin-specific action UI without resetting unrelated search/map state.
+- Starting POI creation from the temporary pin, cancelling POI creation, creating a POI, or
+  leaving the LiveView clears the temporary pin.
 - Inspecting or editing a persisted POI clears the temporary pin.
 - Temporary pins are never broadcast and never written to Ash resources.
 - The map focuses the selected result: use `fitBounds` when result bounds are present,
@@ -174,8 +178,8 @@ result.
 - External provider tests with deterministic HTTP stubs; cover successful responses, empty
   arrays, malformed JSON, timeout/network errors, and 429/rate-limit-style responses.
 - LiveView tests using stable DOM IDs for the search form, results, no-results state, error
-  flash, collapse toggle, result selection, temporary pin selection event, and POI creation
-  handoff.
+  flash, collapse toggle, result selection, temporary pin selection event, temporary pin clear
+  control, and POI creation handoff.
 - StreamData property tests for coordinate parser invariants and normalization invariants:
   accepted coordinates are always finite, in range, and stored as `{lng, lat}` with SRID 4326;
   invalid coordinate-like input never returns a result.

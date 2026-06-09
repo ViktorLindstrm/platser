@@ -335,12 +335,7 @@ defmodule PlatserWeb.MapLive do
   def handle_event("toggle_map_search", _params, socket) do
     collapsed? = !socket.assigns.map_search_collapsed?
 
-    socket =
-      socket
-      |> assign(:map_search_collapsed?, collapsed?)
-      |> maybe_clear_temporary_search_pin(collapsed?)
-
-    {:noreply, socket}
+    {:noreply, assign(socket, :map_search_collapsed?, collapsed?)}
   end
 
   def handle_event("clear_map_search", _params, socket) do
@@ -376,6 +371,13 @@ defmodule PlatserWeb.MapLive do
     end
   end
 
+  def handle_event("clear_temporary_search_pin", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected_map_search_result, nil)
+     |> push_event("clear_temporary_search_pin", %{})}
+  end
+
   def handle_event("change_map_search", %{"search" => %{"query" => query}}, socket) do
     if String.trim(query || "") == "" do
       {:noreply, reset_map_search(socket)}
@@ -396,8 +398,6 @@ defmodule PlatserWeb.MapLive do
       |> assign(:map_search_form, to_form(%{"query" => query}, as: :search))
       |> assign(:map_search_query, query)
       |> assign(:map_search_collapsed?, false)
-      |> assign(:selected_map_search_result, nil)
-      |> push_event("clear_temporary_search_pin", %{})
 
     if query == "" do
       {:noreply,
@@ -1301,19 +1301,7 @@ defmodule PlatserWeb.MapLive do
     |> assign(:map_search_query, "")
     |> assign(:map_search_results, [])
     |> assign(:map_search_state, :idle)
-    |> assign(:selected_map_search_result, nil)
-    |> push_event("clear_temporary_search_pin", %{})
   end
-
-  @spec maybe_clear_temporary_search_pin(Phoenix.LiveView.Socket.t(), boolean()) ::
-          Phoenix.LiveView.Socket.t()
-  defp maybe_clear_temporary_search_pin(socket, true) do
-    socket
-    |> assign(:selected_map_search_result, nil)
-    |> push_event("clear_temporary_search_pin", %{})
-  end
-
-  defp maybe_clear_temporary_search_pin(socket, false), do: socket
 
   @spec find_map_search_result([SearchResult.t()], String.t()) :: SearchResult.t() | nil
   defp find_map_search_result(results, result_id) do

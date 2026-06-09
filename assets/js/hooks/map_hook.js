@@ -297,6 +297,19 @@ export default {
     }
     document.addEventListener("click", this._onCreatePoiFromSearchResultClick)
 
+    this._onClearTemporarySearchPinClick = e => {
+      const target =
+        e.target.closest?.("[data-clear-temporary-search-pin]") ||
+        e.target.querySelector?.("[data-clear-temporary-search-pin]")
+
+      if (target) {
+        e.preventDefault()
+        e.stopPropagation()
+        this.pushEvent("clear_temporary_search_pin", {})
+      }
+    }
+    document.addEventListener("click", this._onClearTemporarySearchPinClick)
+
     this.map.on("load", () => {
       this.mapReady = true
       this.pendingCallbacks.forEach(fn => fn())
@@ -665,7 +678,6 @@ export default {
     ].join(";")
 
     const card = document.createElement("div")
-    card.dataset.createPoiFromSearchResult = "true"
     card.style.cssText = [
       "min-width:180px",
       "max-width:240px",
@@ -678,17 +690,59 @@ export default {
       "backdrop-filter:blur(10px)",
     ].join(";")
 
+    const header = document.createElement("div")
+    header.style.cssText = [
+      "display:flex",
+      "align-items:flex-start",
+      "gap:8px",
+      "margin-bottom:3px",
+    ].join(";")
+
     const meta = document.createElement("div")
     meta.textContent = [payload?.source_label, payload?.kind_label].filter(Boolean).join(" · ")
     meta.style.cssText = [
+      "flex:1",
+      "min-width:0",
       "font-size:11px",
       "font-weight:700",
       "color:#2563EB",
-      "margin-bottom:3px",
       "white-space:nowrap",
       "overflow:hidden",
       "text-overflow:ellipsis",
     ].join(";")
+
+    const clear = document.createElement("button")
+    clear.id = "temporary-search-pin-clear"
+    clear.type = "button"
+    clear.dataset.clearTemporarySearchPin = "true"
+    clear.setAttribute("aria-label", "Clear temporary search pin")
+    clear.title = "Clear temporary search pin"
+    clear.textContent = "x"
+    clear.style.cssText = [
+      "width:22px",
+      "height:22px",
+      "border:0",
+      "border-radius:999px",
+      "background:#F3F4F6",
+      "color:#4B5563",
+      "font-size:16px",
+      "font-weight:800",
+      "line-height:20px",
+      "cursor:pointer",
+      "display:flex",
+      "align-items:center",
+      "justify-content:center",
+      "padding:0",
+      "flex-shrink:0",
+    ].join(";")
+    clear.addEventListener("mouseenter", () => {
+      clear.style.background = "#E5E7EB"
+      clear.style.color = "#111827"
+    })
+    clear.addEventListener("mouseleave", () => {
+      clear.style.background = "#F3F4F6"
+      clear.style.color = "#4B5563"
+    })
 
     const title = document.createElement("div")
     title.textContent = payload?.title || "Selected place"
@@ -704,6 +758,7 @@ export default {
     ].join(";")
 
     const action = document.createElement("button")
+    action.id = "temporary-search-pin-create-poi"
     action.type = "button"
     action.dataset.createPoiFromSearchResult = "true"
     action.textContent = "Create POI"
@@ -723,7 +778,9 @@ export default {
     action.addEventListener("mouseenter", () => { action.style.background = "#1D4ED8" })
     action.addEventListener("mouseleave", () => { action.style.background = "#2563EB" })
 
-    card.appendChild(meta)
+    header.appendChild(meta)
+    header.appendChild(clear)
+    card.appendChild(header)
     card.appendChild(title)
     card.appendChild(action)
 
@@ -1104,6 +1161,9 @@ export default {
     }
     if (this._onCreatePoiFromSearchResultClick) {
       document.removeEventListener("click", this._onCreatePoiFromSearchResultClick)
+    }
+    if (this._onClearTemporarySearchPinClick) {
+      document.removeEventListener("click", this._onClearTemporarySearchPinClick)
     }
     this.hoverPopup?.remove()
     this.map?.remove()

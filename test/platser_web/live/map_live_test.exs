@@ -215,7 +215,8 @@ defmodule PlatserWeb.MapLiveTest do
       assert has_element?(view, "#map-search-result-external-nominatim-321", "Map")
     end
 
-    test "clearing the search input clears visible results", %{conn: conn} do
+    test "clearing the search input clears visible results but keeps the temporary pin selected",
+         %{conn: conn} do
       user = create_user("search_clear_results")
       event = create_event(user)
 
@@ -243,12 +244,21 @@ defmodule PlatserWeb.MapLiveTest do
       assert has_element?(view, "#map-search-results")
       assert has_element?(view, "#map-search-result-external-nominatim-432")
 
+      render_click(element(view, "#map-search-result-external-nominatim-432"))
+      assert_push_event(view, "show_temporary_search_pin", %{id: "external:nominatim:432"})
+
       render_change(element(view, "#map-search-form"), %{
         "search" => %{"query" => ""}
       })
 
       refute has_element?(view, "#map-search-results")
       refute has_element?(view, "#map-search-result-external-nominatim-432")
+
+      render_hook(view, "create_poi_from_search_result", %{})
+
+      assert_push_event(view, "clear_temporary_search_pin", %{})
+      assert has_element?(view, ~s(#poi-name[value="Clearable Camp"]))
+      assert has_element?(view, "#poi-form", "59.32930, 18.06860")
     end
 
     test "search shows a clear no-results state", %{conn: conn} do
@@ -288,22 +298,45 @@ defmodule PlatserWeb.MapLiveTest do
       assert has_element?(view, "#flash-error", "Map search is busy. Try again soon.")
     end
 
-    test "search can be collapsed and expanded", %{conn: conn} do
+    test "search can be collapsed and expanded without clearing the temporary pin", %{conn: conn} do
       user = create_user("search_collapse")
       event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 765,
+            "lat" => "59.3293",
+            "lon" => "18.0686",
+            "name" => "Collapsible Camp",
+            "display_name" => "Collapsible Camp, Stockholm, Sweden",
+            "class" => "tourism",
+            "type" => "camp_site"
+          }
+        ])
+      end)
+
       conn = sign_in_conn(conn, user)
 
       {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "collapsible camp"}
+      })
+
+      render_click(element(view, "#map-search-result-external-nominatim-765"))
+      assert_push_event(view, "show_temporary_search_pin", %{id: "external:nominatim:765"})
 
       render_click(element(view, "#map-search-collapse-toggle"))
 
       refute has_element?(view, "#map-search-form")
       assert has_element?(view, "#map-search-expand-toggle")
 
-      render_click(element(view, "#map-search-expand-toggle"))
+      render_hook(view, "create_poi_from_search_result", %{})
 
-      assert has_element?(view, "#map-search-form")
-      refute has_element?(view, "#map-search-expand-toggle")
+      assert_push_event(view, "clear_temporary_search_pin", %{})
+      assert has_element?(view, ~s(#poi-name[value="Collapsible Camp"]))
+      assert has_element?(view, "#poi-form", "59.32930, 18.06860")
     end
 
     test "selecting an external result pushes a temporary search pin", %{conn: conn} do
@@ -412,6 +445,107 @@ defmodule PlatserWeb.MapLiveTest do
         lng: 18.1,
         bounds: nil
       })
+    end
+
+    test "selecting a result from a later search replaces the temporary search pin",
+         %{conn: conn} do
+      user = create_user("search_pin_later_replace")
+      event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, 2, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        if conn.query_params["q"] == "first place" do
+          Req.Test.json(conn, [
+            %{
+              "place_id" => 333,
+              "lat" => "59.3000",
+              "lon" => "18.0000",
+              "name" => "First Later Place",
+              "display_name" => "First Later Place, Sweden",
+              "class" => "place",
+              "type" => "locality"
+            }
+          ])
+        else
+          Req.Test.json(conn, [
+            %{
+              "place_id" => 444,
+              "lat" => "59.4000",
+              "lon" => "18.1000",
+              "name" => "Second Later Place",
+              "display_name" => "Second Later Place, Sweden",
+              "class" => "place",
+              "type" => "locality"
+            }
+          ])
+        end
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "first place"}
+      })
+
+      render_click(element(view, "#map-search-result-external-nominatim-333"))
+      assert_push_event(view, "show_temporary_search_pin", %{id: "external:nominatim:333"})
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "second place"}
+      })
+
+      render_click(element(view, "#map-search-result-external-nominatim-444"))
+
+      assert_push_event(view, "show_temporary_search_pin", %{
+        id: "external:nominatim:444",
+        title: "Second Later Place",
+        lat: 59.4,
+        lng: 18.1
+      })
+    end
+
+    test "temporary pin clear action removes pin state without clearing search results", %{
+      conn: conn
+    } do
+      user = create_user("search_pin_clear")
+      event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 876,
+            "lat" => "59.3293",
+            "lon" => "18.0686",
+            "name" => "Clear Pin Camp",
+            "display_name" => "Clear Pin Camp, Stockholm, Sweden",
+            "class" => "tourism",
+            "type" => "camp_site"
+          }
+        ])
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "clear pin camp"}
+      })
+
+      render_click(element(view, "#map-search-result-external-nominatim-876"))
+      assert_push_event(view, "show_temporary_search_pin", %{id: "external:nominatim:876"})
+
+      render_hook(view, "clear_temporary_search_pin", %{})
+
+      assert_push_event(view, "clear_temporary_search_pin", %{})
+      assert has_element?(view, "#map-search-results")
+      assert has_element?(view, "#map-search-result-external-nominatim-876")
+
+      render_hook(view, "create_poi_from_search_result", %{})
+
+      refute has_element?(view, ~s(#poi-name[value="Clear Pin Camp"]))
+      assert list_event_pois(user, event) == []
     end
 
     test "temporary pin create action opens the POI form with result location", %{conn: conn} do

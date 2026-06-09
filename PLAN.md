@@ -35,13 +35,20 @@
    - Selecting a result focuses the map and replaces any previous temporary pin.
    - Render the temporary pin as a distinct classic teardrop marker, separate from persisted POI GeoJSON.
    - Add a "Create POI" action near the temporary pin.
+   - Keep the temporary pin lifecycle separate from the search input/results lifecycle.
 
 5. Task #80: connect temporary pin to POI creation.
    - The temporary pin action enters the existing POI creation flow with `poi_step: :editing` and `poi_location` set to the selected point.
    - Pre-fill the POI name from the selected result title when available, but let existing validations and permissions remain authoritative.
    - Clear the temporary pin once creation starts, is cancelled, or completes.
 
-6. Task #81: review and harden.
+6. Task #82: decouple temporary pin clearing from search UI clearing.
+   - Clearing the search input clears only the input, result list, and no-results state.
+   - Collapsing/minimizing search frees viewport space without removing the current temporary pin.
+   - The temporary pin exposes its own explicit clear control and keeps "Create POI" as the handoff into the existing POI creation flow.
+   - Selecting a result from a later search replaces the current temporary pin instead of accumulating pins.
+
+7. Task #81: review and harden.
    - Review implementation against ADR-0032 and this plan.
    - Run `mix precommit` and fix pending issues.
    - Use browser interaction for the LiveView flow where useful.
