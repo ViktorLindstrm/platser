@@ -27,6 +27,14 @@ config :platser, PlatserWeb.Endpoint,
 # In test we don't send emails
 config :platser, Platser.Mailer, adapter: Swoosh.Adapters.Test
 
+config :platser,
+       :geocoder_req_options,
+       plug: {Req.Test, Platser.Map.Search.Geocoder}
+
+config :platser,
+       :geocoder_rate_limit_public?,
+       false
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 

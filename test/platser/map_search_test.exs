@@ -6,6 +6,11 @@ defmodule Platser.MapSearchTest do
   alias Platser.Map.Search
   alias Platser.Map.Search.Result
 
+  setup do
+    Req.Test.verify_on_exit!(Platser.Map.Search.Geocoder)
+    :ok
+  end
+
   describe "search_internal/4" do
     test "normalizes visible POI matches by name, description, and category" do
       user = create_user()
@@ -143,6 +148,167 @@ defmodule Platser.MapSearchTest do
       assert :error = Search.parse_coordinates("59,181")
       assert :error = Search.parse_coordinates("59.0,18.0,extra")
       assert :error = Search.parse_coordinates("59.0 north,18.0 east")
+    end
+  end
+
+  describe "search_external/2" do
+    test "queries Nominatim search and normalizes external place results" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        assert conn.request_path == "/search"
+        assert conn.query_params["q"] == "central camp"
+        assert conn.query_params["format"] == "jsonv2"
+        assert conn.query_params["addressdetails"] == "1"
+        assert conn.query_params["limit"] == "2"
+        assert conn.query_params["viewbox"] == "17.9,59.4,18.2,59.1"
+        assert conn.query_params["bounded"] == "1"
+
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 123,
+            "lat" => "59.3293",
+            "lon" => "18.0686",
+            "name" => "Central Camp",
+            "display_name" => "Central Camp, Stockholm, Sweden",
+            "class" => "tourism",
+            "type" => "camp_site",
+            "boundingbox" => ["59.32", "59.34", "18.06", "18.08"],
+            "address" => %{
+              "road" => "Camp Road",
+              "city" => "Stockholm",
+              "country" => "Sweden"
+            }
+          }
+        ])
+      end)
+
+      assert {:ok, [result]} =
+               Search.search_external("central camp",
+                 limit: 2,
+                 bounds: %{west: 17.9, south: 59.1, east: 18.2, north: 59.4},
+                 bounded?: true
+               )
+
+      assert %Result{} = result
+      assert result.id == "external:nominatim:123"
+      assert result.source == :external
+      assert result.source_label == "OpenStreetMap"
+      assert result.kind == :category
+      assert result.kind_label == "Camp site"
+      assert result.title == "Central Camp"
+      assert result.subtitle == "Central Camp, Stockholm, Sweden"
+      assert result.location == point(18.0686, 59.3293)
+      assert result.bounds == %{west: 18.06, south: 59.32, east: 18.08, north: 59.34}
+      assert result.category == "camp_site"
+      assert result.address == "Camp Road, Stockholm, Sweden"
+      assert result.provider == :nominatim
+    end
+
+    test "category-only searches map known app categories to provider query text" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        assert conn.request_path == "/search"
+        assert conn.query_params["q"] == "restaurant"
+
+        Req.Test.json(conn, [])
+      end)
+
+      assert {:ok, []} = Search.search_external("", category: :food)
+    end
+
+    test "coordinate input calls reverse and returns a coordinate result with address context" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        assert conn.request_path == "/reverse"
+        assert conn.query_params["lat"] == "59.3293"
+        assert conn.query_params["lon"] == "18.0686"
+
+        Req.Test.json(conn, %{
+          "display_name" => "Sergels torg, Stockholm, Sweden",
+          "address" => %{"square" => "Sergels torg", "city" => "Stockholm", "country" => "Sweden"},
+          "class" => "place",
+          "type" => "square"
+        })
+      end)
+
+      assert {:ok, [result]} = Search.search_external("59.3293,18.0686")
+
+      assert result.id == "external:nominatim:coordinate:59.3293,18.0686"
+      assert result.kind == :coordinate
+      assert result.kind_label == "Coordinates"
+      assert result.title == "Sergels torg, Stockholm, Sweden"
+      assert result.subtitle == "59.3293, 18.0686"
+      assert result.location == point(18.0686, 59.3293)
+      assert result.address == "Stockholm, Sweden, Sergels torg"
+    end
+
+    test "can normalize coordinate input without reverse lookup" do
+      assert {:ok, [result]} = Search.search_external("59.3293,18.0686", reverse?: false)
+
+      assert result.kind == :coordinate
+      assert result.title == "59.3293, 18.0686"
+      assert result.location == point(18.0686, 59.3293)
+    end
+
+    test "empty provider responses are successful empty results" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [])
+      end)
+
+      assert {:ok, []} = Search.search_external("missing place")
+    end
+
+    test "normalizes malformed provider responses" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, %{"unexpected" => "shape"})
+      end)
+
+      assert {:error, :malformed_response} = Search.search_external("broken")
+    end
+
+    test "normalizes malformed result coordinates" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 123,
+            "lat" => "not-a-number",
+            "lon" => "18.0686",
+            "display_name" => "Broken place"
+          }
+        ])
+      end)
+
+      assert {:error, :malformed_response} = Search.search_external("broken")
+    end
+
+    test "normalizes rate-limit and transport errors" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Plug.Conn.send_resp(conn, 429, "too many requests")
+      end)
+
+      assert {:error, :provider_rate_limited} = Search.search_external("limited")
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.transport_error(conn, :timeout)
+      end)
+
+      assert {:error, :provider_timeout} = Search.search_external("timeout")
+    end
+
+    test "rejects invalid input and unsupported bounded searches" do
+      assert {:error, :invalid_query} = Search.search_external("   ")
+      assert {:error, :invalid_limit} = Search.search_external("stockholm", limit: 0)
+
+      assert {:error, :invalid_bounds} =
+               Search.search_external("stockholm",
+                 bounds: %{west: 181.0, south: 0.0, east: 1.0, north: 1.0}
+               )
+
+      assert {:error, :unsupported} = Search.search_external("stockholm", bounded?: true)
+      assert {:error, :invalid_query} = Search.search_external("", category: :unknown)
     end
   end
 

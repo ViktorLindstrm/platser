@@ -16,6 +16,7 @@ defmodule Platser.Application do
       {Phoenix.PubSub, name: Platser.PubSub},
       Platser.EventPresence,
       Platser.Admin.ErrorBuffer,
+      Platser.Map.Search.Geocoder.RateLimiter,
       # Start to serve requests, typically the last entry
       PlatserWeb.Endpoint,
       {AshAuthentication.Supervisor, [otp_app: :platser]}

@@ -56,6 +56,22 @@ config :platser,
        :pmtiles_url,
        "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 
+config :platser,
+       :geocoder_url,
+       "https://nominatim.openstreetmap.org"
+
+config :platser,
+       :geocoder_user_agent,
+       "Platser/0.1"
+
+config :platser,
+       :geocoder_req_options,
+       []
+
+config :platser,
+       :geocoder_rate_limit_public?,
+       true
+
 # Configure the endpoint
 config :platser, PlatserWeb.Endpoint,
   url: [host: "localhost"],

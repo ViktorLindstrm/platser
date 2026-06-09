@@ -6,6 +6,15 @@ defmodule Platser.Map.Search.Result do
   @type source :: :internal | :external
   @type kind :: :poi | :address | :place | :coordinate | :category
   @type provider :: nil | :nominatim
+  @type error_reason ::
+          :invalid_limit
+          | :invalid_query
+          | :invalid_bounds
+          | :unsupported
+          | :provider_timeout
+          | :provider_rate_limited
+          | :provider_unavailable
+          | :malformed_response
   @type bounds :: %{west: float(), south: float(), east: float(), north: float()}
 
   @type t :: %__MODULE__{

@@ -9,15 +9,21 @@ defmodule Platser.Map.Search do
 
   alias Platser.Map, as: PlatserMap
   alias Platser.Map.Poi
+  alias Platser.Map.Search.Geocoder
   alias Platser.Map.Search.Result
 
   @type poi_category :: :viewpoint | :camp | :hazard | :meeting_point | :food | :other
-  @type search_error :: :invalid_limit
+  @type search_error :: Result.error_reason()
+  @type bounds :: Result.bounds()
   @type limit :: 1..50
   @type search_opts :: [
           origin: Geo.Point.t() | nil,
           nearby_radius_m: non_neg_integer(),
-          limit: limit()
+          limit: limit(),
+          bounds: bounds() | nil,
+          bounded?: boolean(),
+          category: poi_category() | nil,
+          reverse?: boolean()
         ]
 
   @poi_categories [:viewpoint, :camp, :hazard, :meeting_point, :food, :other]
@@ -50,6 +56,19 @@ defmodule Platser.Map.Search do
 
       {:ok, results}
     end
+  end
+
+  @doc """
+  Searches the configured external Nominatim-compatible geocoder.
+
+  The query is explicit-submit oriented. Blank text without a supported
+  category is rejected, coordinate input is normalized immediately and may be
+  reverse-geocoded, and provider payloads are converted to `Result` structs.
+  """
+  @spec search_external(String.t(), search_opts()) ::
+          {:ok, [Result.t()]} | {:error, search_error()}
+  def search_external(query_text, opts \\ []) do
+    Geocoder.search(query_text, opts)
   end
 
   @doc """
