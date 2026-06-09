@@ -68,7 +68,7 @@ Use a typed struct, for example `Platser.Map.Search.Result`, with this conceptua
 |-------|---------|
 | `id` | Stable UI/session identifier, namespaced by source. |
 | `source` | `:internal` or `:external`. |
-| `source_label` | User-facing label such as `"Event POI"` or `"OpenStreetMap"`. |
+| `source_label` | User-facing label such as `"Event POI"` or `"Map"`. |
 | `kind` | Closed union such as `:poi`, `:address`, `:place`, `:coordinate`, `:category`. |
 | `kind_label` | User-facing type label such as `"POI"`, `"Address"`, or `"Coordinates"`. |
 | `title` | Primary result label. |
@@ -90,9 +90,13 @@ Every result row must include both source and type:
 
 - Internal POI: source label `"Event POI"` and type label from the app category, for example
   `"Camp"` or `"Hazard"`.
-- External result: source label `"OpenStreetMap"` by default and type label derived from
+- External result: source label `"Map"` by default and type label derived from
   provider category/type, for example `"Address"`, `"Restaurant"`, `"Natural feature"`, or
   fallback `"Place"`.
+
+The external provider name is intentionally not exposed in the primary result label. Users only
+need to distinguish event-created POIs from map-provider findings; provider details remain an
+implementation concern.
 
 Internal results should sort before external results when relevance is otherwise similar
 because they represent event-specific knowledge.

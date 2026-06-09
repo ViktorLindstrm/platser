@@ -207,7 +207,7 @@ defmodule PlatserWeb.MapLiveTest do
 
       assert has_element?(view, "#map-search-results")
       assert has_element?(view, "#map-search-result-internal-poi-#{poi.id}", "Event POI")
-      assert has_element?(view, "#map-search-result-external-nominatim-321", "OpenStreetMap")
+      assert has_element?(view, "#map-search-result-external-nominatim-321", "Map")
     end
 
     test "search shows a clear no-results state", %{conn: conn} do
@@ -263,6 +263,216 @@ defmodule PlatserWeb.MapLiveTest do
 
       assert has_element?(view, "#map-search-form")
       refute has_element?(view, "#map-search-expand-toggle")
+    end
+
+    test "selecting an external result pushes a temporary search pin", %{conn: conn} do
+      user = create_user("search_pin")
+      event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 321,
+            "lat" => "59.3293",
+            "lon" => "18.0686",
+            "name" => "Central Camp",
+            "display_name" => "Central Camp, Stockholm, Sweden",
+            "class" => "tourism",
+            "type" => "camp_site"
+          }
+        ])
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "central camp"}
+      })
+
+      render_click(element(view, "#map-search-result-external-nominatim-321"))
+
+      assert_push_event(view, "show_temporary_search_pin", %{
+        id: "external:nominatim:321",
+        source: "external",
+        source_label: "Map",
+        kind: "category",
+        kind_label: "Camp site",
+        title: "Central Camp",
+        subtitle: "Central Camp, Stockholm, Sweden",
+        lat: 59.3293,
+        lng: 18.0686,
+        bounds: nil
+      })
+    end
+
+    test "selecting a different result updates the temporary search pin payload", %{
+      conn: conn
+    } do
+      user = create_user("search_pin_replace")
+      event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 111,
+            "lat" => "59.3000",
+            "lon" => "18.0000",
+            "name" => "First Place",
+            "display_name" => "First Place, Sweden",
+            "class" => "place",
+            "type" => "locality"
+          },
+          %{
+            "place_id" => 222,
+            "lat" => "59.4000",
+            "lon" => "18.1000",
+            "name" => "Second Place",
+            "display_name" => "Second Place, Sweden",
+            "class" => "place",
+            "type" => "locality"
+          }
+        ])
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "place"}
+      })
+
+      render_click(element(view, "#map-search-result-external-nominatim-111"))
+
+      assert_push_event(view, "show_temporary_search_pin", %{
+        id: "external:nominatim:111",
+        source: "external",
+        source_label: "Map",
+        kind: "place",
+        kind_label: "Locality",
+        title: "First Place",
+        subtitle: "First Place, Sweden",
+        lat: 59.3,
+        lng: 18.0,
+        bounds: nil
+      })
+
+      render_click(element(view, "#map-search-result-external-nominatim-222"))
+
+      assert_push_event(view, "show_temporary_search_pin", %{
+        id: "external:nominatim:222",
+        source: "external",
+        source_label: "Map",
+        kind: "place",
+        kind_label: "Locality",
+        title: "Second Place",
+        subtitle: "Second Place, Sweden",
+        lat: 59.4,
+        lng: 18.1,
+        bounds: nil
+      })
+    end
+
+    test "temporary pin create action opens the POI form with result location", %{conn: conn} do
+      user = create_user("search_pin_create")
+      event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 321,
+            "lat" => "59.3293",
+            "lon" => "18.0686",
+            "name" => "Central Camp",
+            "display_name" => "Central Camp, Stockholm, Sweden",
+            "class" => "tourism",
+            "type" => "camp_site"
+          }
+        ])
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "central camp"}
+      })
+
+      render_click(element(view, "#map-search-result-external-nominatim-321"))
+
+      assert_push_event(view, "show_temporary_search_pin", %{
+        id: "external:nominatim:321",
+        source: "external",
+        source_label: "Map",
+        kind: "category",
+        kind_label: "Camp site",
+        title: "Central Camp",
+        subtitle: "Central Camp, Stockholm, Sweden",
+        lat: 59.3293,
+        lng: 18.0686,
+        bounds: nil
+      })
+
+      render_hook(view, "create_poi_from_search_result", %{})
+
+      assert_push_event(view, "clear_temporary_search_pin", %{})
+      assert has_element?(view, ~s(#poi-name[value="Central Camp"]))
+      assert has_element?(view, "#poi-form", "59.32930, 18.06860")
+    end
+
+    test "temporary pin create action shortens map result names to the first place part", %{
+      conn: conn
+    } do
+      user = create_user("search_pin_create_short")
+      event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        assert conn.request_path == "/reverse"
+        assert conn.query_params["lat"] == "59.3293"
+        assert conn.query_params["lon"] == "18.0686"
+
+        Req.Test.json(conn, %{
+          "display_name" => "Sergels torg, Stockholm, Sweden",
+          "address" => %{
+            "square" => "Sergels torg",
+            "city" => "Stockholm",
+            "country" => "Sweden"
+          },
+          "class" => "place",
+          "type" => "square"
+        })
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "59.3293,18.0686"}
+      })
+
+      render_click(
+        element(view, "#map-search-result-external-nominatim-coordinate-59-3293-18-0686")
+      )
+
+      assert_push_event(view, "show_temporary_search_pin", %{
+        id: "external:nominatim:coordinate:59.3293,18.0686",
+        source: "external",
+        source_label: "Map",
+        kind: "coordinate",
+        kind_label: "Coordinates",
+        title: "Sergels torg, Stockholm, Sweden",
+        subtitle: "59.3293, 18.0686",
+        lat: 59.3293,
+        lng: 18.0686,
+        bounds: nil
+      })
+
+      render_hook(view, "create_poi_from_search_result", %{})
+
+      assert has_element?(view, ~s(#poi-name[value="Sergels torg"]))
+      refute has_element?(view, ~s(#poi-name[value="Sergels torg, Stockholm, Sweden"]))
     end
   end
 

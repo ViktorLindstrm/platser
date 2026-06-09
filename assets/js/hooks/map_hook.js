@@ -237,6 +237,8 @@ export default {
     this.drawMode = false
     this.drawVertices = []
     this.hoverPopup = null
+    this.temporarySearchMarker = null
+    this.temporarySearchPopup = null
 
     // Live location sharing state
     this.memberMarkers = {}
@@ -281,6 +283,19 @@ export default {
       }
     }
     document.addEventListener("click", this._onCheckInClick)
+
+    this._onCreatePoiFromSearchResultClick = e => {
+      const target =
+        e.target.closest?.("[data-create-poi-from-search-result]") ||
+        e.target.querySelector?.("[data-create-poi-from-search-result]")
+
+      if (target) {
+        e.preventDefault()
+        e.stopPropagation()
+        this.pushEvent("create_poi_from_search_result", {})
+      }
+    }
+    document.addEventListener("click", this._onCreatePoiFromSearchResultClick)
 
     this.map.on("load", () => {
       this.mapReady = true
@@ -365,6 +380,14 @@ export default {
           )
         }
       })
+    })
+
+    this.handleEvent("show_temporary_search_pin", payload => {
+      this.runWhenReady(() => this._showTemporarySearchPin(payload))
+    })
+
+    this.handleEvent("clear_temporary_search_pin", () => {
+      this.runWhenReady(() => this._clearTemporarySearchPin())
     })
 
     this.handleEvent("undo_last_vertex", () => {
@@ -617,6 +640,158 @@ export default {
   _clearDrawPreview() {
     const source = this.map.getSource("draw-preview")
     if (source) source.setData({type: "FeatureCollection", features: []})
+  },
+
+  _showTemporarySearchPin(payload) {
+    const lat = Number.parseFloat(payload?.lat)
+    const lng = Number.parseFloat(payload?.lng)
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return
+
+    this._clearTemporarySearchPin()
+
+    const container = document.createElement("div")
+    container.className = "temporary-search-pin"
+    container.dataset.temporarySearchPin = "true"
+    container.dataset.createPoiFromSearchResult = "true"
+    container.style.cssText = [
+      "display:flex",
+      "flex-direction:column",
+      "align-items:center",
+      "gap:8px",
+      "transform:translateY(-2px)",
+      "position:relative",
+      "z-index:5",
+      "pointer-events:auto",
+    ].join(";")
+
+    const card = document.createElement("div")
+    card.dataset.createPoiFromSearchResult = "true"
+    card.style.cssText = [
+      "min-width:180px",
+      "max-width:240px",
+      "border:1px solid rgba(15,23,42,0.12)",
+      "border-radius:12px",
+      "background:rgba(255,255,255,0.96)",
+      "box-shadow:0 12px 30px rgba(15,23,42,0.22)",
+      "padding:10px",
+      "font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+      "backdrop-filter:blur(10px)",
+    ].join(";")
+
+    const meta = document.createElement("div")
+    meta.textContent = [payload?.source_label, payload?.kind_label].filter(Boolean).join(" · ")
+    meta.style.cssText = [
+      "font-size:11px",
+      "font-weight:700",
+      "color:#2563EB",
+      "margin-bottom:3px",
+      "white-space:nowrap",
+      "overflow:hidden",
+      "text-overflow:ellipsis",
+    ].join(";")
+
+    const title = document.createElement("div")
+    title.textContent = payload?.title || "Selected place"
+    title.style.cssText = [
+      "font-size:13px",
+      "font-weight:800",
+      "color:#111827",
+      "line-height:1.25",
+      "overflow:hidden",
+      "display:-webkit-box",
+      "-webkit-line-clamp:2",
+      "-webkit-box-orient:vertical",
+    ].join(";")
+
+    const action = document.createElement("button")
+    action.type = "button"
+    action.dataset.createPoiFromSearchResult = "true"
+    action.textContent = "Create POI"
+    action.style.cssText = [
+      "margin-top:8px",
+      "width:100%",
+      "border:0",
+      "border-radius:9px",
+      "background:#2563EB",
+      "color:white",
+      "font-size:12px",
+      "font-weight:800",
+      "padding:7px 9px",
+      "cursor:pointer",
+      "box-shadow:0 1px 2px rgba(15,23,42,0.16)",
+    ].join(";")
+    action.addEventListener("mouseenter", () => { action.style.background = "#1D4ED8" })
+    action.addEventListener("mouseleave", () => { action.style.background = "#2563EB" })
+
+    card.appendChild(meta)
+    card.appendChild(title)
+    card.appendChild(action)
+
+    const pin = document.createElement("div")
+    pin.style.cssText = [
+      "width:34px",
+      "height:34px",
+      "background:#2563EB",
+      "border:3px solid white",
+      "border-radius:50% 50% 50% 0",
+      "box-shadow:0 4px 12px rgba(15,23,42,0.3)",
+      "display:flex",
+      "align-items:center",
+      "justify-content:center",
+      "transform:rotate(-45deg)",
+      "transform-origin:center center",
+      "color:white",
+      "font-size:15px",
+      "font-weight:900",
+      "outline:2px dashed rgba(37,99,235,0.35)",
+      "outline-offset:3px",
+    ].join(";")
+
+    const pinDot = document.createElement("span")
+    pinDot.textContent = "+"
+    pinDot.style.cssText = [
+      "transform:rotate(45deg)",
+      "line-height:1",
+      "margin-top:-1px",
+      "user-select:none",
+    ].join(";")
+    pin.appendChild(pinDot)
+
+    container.appendChild(pin)
+
+    this.temporarySearchMarker = new maplibregl.Marker({element: container, anchor: "bottom"})
+      .setLngLat([lng, lat])
+      .addTo(this.map)
+
+    this.temporarySearchPopup = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      offset: [0, -42],
+      className: "temporary-search-popup",
+    })
+      .setDOMContent(card)
+      .setLngLat([lng, lat])
+      .addTo(this.map)
+
+    if (payload?.bounds) {
+      this.map.fitBounds(
+        [[payload.bounds.west, payload.bounds.south], [payload.bounds.east, payload.bounds.north]],
+        {padding: 72, maxZoom: 16, duration: 450}
+      )
+    } else {
+      this.map.flyTo({center: [lng, lat], zoom: Math.max(this.map.getZoom(), 15), duration: 450})
+    }
+  },
+
+  _clearTemporarySearchPin() {
+    if (this.temporarySearchMarker) {
+      this.temporarySearchMarker.remove()
+      this.temporarySearchMarker = null
+    }
+    if (this.temporarySearchPopup) {
+      this.temporarySearchPopup.remove()
+      this.temporarySearchPopup = null
+    }
   },
 
   _initSources(pois, geofences) {
@@ -918,6 +1093,7 @@ export default {
 
   destroyed() {
     this._stopGeolocation()
+    this._clearTemporarySearchPin()
     this._clearAllMemberMarkers()
     this._clearAllCheckInMarkers()
     if (this._onSetBoundsClick) {
@@ -925,6 +1101,9 @@ export default {
     }
     if (this._onCheckInClick) {
       document.removeEventListener("click", this._onCheckInClick)
+    }
+    if (this._onCreatePoiFromSearchResultClick) {
+      document.removeEventListener("click", this._onCreatePoiFromSearchResultClick)
     }
     this.hoverPopup?.remove()
     this.map?.remove()

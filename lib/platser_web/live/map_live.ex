@@ -120,6 +120,7 @@ defmodule PlatserWeb.MapLive do
             |> assign(:map_search_results, [])
             |> assign(:map_search_state, :idle)
             |> assign(:map_search_collapsed?, false)
+            |> assign(:selected_map_search_result, nil)
             |> assign(:in_event_boundary?, presence_in_boundary?(current_location, geofences))
             |> allow_upload(:photos,
               accept: ~w(.jpg .jpeg .png .webp),
@@ -332,11 +333,47 @@ defmodule PlatserWeb.MapLive do
   end
 
   def handle_event("toggle_map_search", _params, socket) do
-    {:noreply, assign(socket, :map_search_collapsed?, !socket.assigns.map_search_collapsed?)}
+    collapsed? = !socket.assigns.map_search_collapsed?
+
+    socket =
+      socket
+      |> assign(:map_search_collapsed?, collapsed?)
+      |> maybe_clear_temporary_search_pin(collapsed?)
+
+    {:noreply, socket}
   end
 
   def handle_event("clear_map_search", _params, socket) do
     {:noreply, reset_map_search(socket)}
+  end
+
+  def handle_event("select_map_search_result", %{"result-id" => result_id}, socket) do
+    case find_map_search_result(socket.assigns.map_search_results, result_id) do
+      nil ->
+        {:noreply, socket}
+
+      %SearchResult{} = result ->
+        {:noreply,
+         socket
+         |> assign(:selected_map_search_result, result)
+         |> assign(:selected_map_object, nil)
+         |> assign(:selected_map_object_can_manage, false)
+         |> push_event("show_temporary_search_pin", temporary_search_pin_payload(result))}
+    end
+  end
+
+  def handle_event("select_map_search_result", _params, socket) do
+    {:noreply, socket}
+  end
+
+  def handle_event("create_poi_from_search_result", _params, socket) do
+    case socket.assigns.selected_map_search_result do
+      %SearchResult{} = result ->
+        {:noreply, prepare_poi_from_search_result(socket, result)}
+
+      nil ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("search_map", %{"search" => %{"query" => query}}, socket) do
@@ -347,6 +384,8 @@ defmodule PlatserWeb.MapLive do
       |> assign(:map_search_form, to_form(%{"query" => query}, as: :search))
       |> assign(:map_search_query, query)
       |> assign(:map_search_collapsed?, false)
+      |> assign(:selected_map_search_result, nil)
+      |> push_event("clear_temporary_search_pin", %{})
 
     if query == "" do
       {:noreply,
@@ -516,6 +555,7 @@ defmodule PlatserWeb.MapLive do
       socket
       |> assign(:selected_map_object, nil)
       |> assign(:selected_map_object_can_manage, false)
+      |> assign(:selected_map_search_result, nil)
       |> assign(:poi_step, :picking)
       |> assign(:poi_location, nil)
       |> assign(:poi_name, "")
@@ -523,6 +563,7 @@ defmodule PlatserWeb.MapLive do
       |> assign(:poi_category, "viewpoint")
       |> assign(:poi_color, @poi_default_color)
       |> assign(:poi_errors, [])
+      |> push_event("clear_temporary_search_pin", %{})
       |> push_event("enable_location_pick", %{})
 
     {:noreply, socket}
@@ -546,18 +587,22 @@ defmodule PlatserWeb.MapLive do
            :selected_map_object_can_manage,
            can_manage_selected_map_object?(selected_map_object.item, actor)
          )
+         |> assign(:selected_map_search_result, nil)
          |> assign(:selected_map_object_activity_filter, :all)
          |> assign(:map_comment_form, to_form(%{"body" => ""}, as: :comment))
-         |> stream(:selected_map_object_entries, entries, reset: true)}
+         |> stream(:selected_map_object_entries, entries, reset: true)
+         |> push_event("clear_temporary_search_pin", %{})}
 
       {:error, :not_found} ->
         {:noreply,
          socket
          |> assign(:selected_map_object, nil)
          |> assign(:selected_map_object_can_manage, false)
+         |> assign(:selected_map_search_result, nil)
          |> assign(:selected_map_object_activity_filter, :all)
          |> assign(:map_comment_form, to_form(%{"body" => ""}, as: :comment))
          |> stream(:selected_map_object_entries, [], reset: true)
+         |> push_event("clear_temporary_search_pin", %{})
          |> put_flash(:error, "Could not load that map item")}
     end
   end
@@ -567,6 +612,7 @@ defmodule PlatserWeb.MapLive do
      socket
      |> assign(:selected_map_object, nil)
      |> assign(:selected_map_object_can_manage, false)
+     |> assign(:selected_map_search_result, nil)
      |> assign(:selected_map_object_activity_filter, :all)
      |> assign(:map_comment_form, to_form(%{"body" => ""}, as: :comment))
      |> stream(:selected_map_object_entries, [], reset: true)}
@@ -594,6 +640,7 @@ defmodule PlatserWeb.MapLive do
          socket
          |> assign(:selected_map_object, nil)
          |> assign(:selected_map_object_can_manage, false)
+         |> assign(:selected_map_search_result, nil)
          |> assign(:editing_poi_id, poi.id)
          |> assign(:editing_poi_published, poi.visibility == :public)
          |> assign(:editing_geofence_id, nil)
@@ -612,6 +659,7 @@ defmodule PlatserWeb.MapLive do
          socket
          |> assign(:selected_map_object, nil)
          |> assign(:selected_map_object_can_manage, false)
+         |> assign(:selected_map_search_result, nil)
          |> assign(:editing_geofence_id, geofence.id)
          |> assign(:editing_geofence_published, geofence.visibility == :public)
          |> assign(:editing_poi_id, nil)
@@ -637,7 +685,9 @@ defmodule PlatserWeb.MapLive do
     {:noreply,
      socket
      |> assign(:poi_step, :editing)
+     |> assign(:selected_map_search_result, nil)
      |> assign(:poi_location, location)
+     |> push_event("clear_temporary_search_pin", %{})
      |> push_event("disable_location_pick", %{})}
   end
 
@@ -645,7 +695,9 @@ defmodule PlatserWeb.MapLive do
     {:noreply,
      socket
      |> assign(:poi_step, :picking)
+     |> assign(:selected_map_search_result, nil)
      |> assign(:poi_location, nil)
+     |> push_event("clear_temporary_search_pin", %{})
      |> push_event("enable_location_pick", %{})}
   end
 
@@ -682,6 +734,7 @@ defmodule PlatserWeb.MapLive do
      socket
      |> assign(:selected_map_object, nil)
      |> assign(:selected_map_object_can_manage, false)
+     |> assign(:selected_map_search_result, nil)
      |> assign(:geofence_step, :drawing)
      |> assign(:geofence_vertices, [])
      |> assign(:geofence_geometry, nil)
@@ -690,6 +743,7 @@ defmodule PlatserWeb.MapLive do
      |> assign(:geofence_purpose, "boundary")
      |> assign(:geofence_color, Map.fetch!(@purpose_colors, "boundary"))
      |> assign(:geofence_errors, [])
+     |> push_event("clear_temporary_search_pin", %{})
      |> push_event("enable_draw_mode", %{})}
   end
 
@@ -1206,6 +1260,8 @@ defmodule PlatserWeb.MapLive do
     |> assign(:poi_errors, [])
     |> assign(:editing_poi_id, nil)
     |> assign(:editing_poi_published, false)
+    |> assign(:selected_map_search_result, nil)
+    |> push_event("clear_temporary_search_pin", %{})
     |> push_event("disable_location_pick", %{})
   end
 
@@ -1233,6 +1289,70 @@ defmodule PlatserWeb.MapLive do
     |> assign(:map_search_query, "")
     |> assign(:map_search_results, [])
     |> assign(:map_search_state, :idle)
+    |> assign(:selected_map_search_result, nil)
+    |> push_event("clear_temporary_search_pin", %{})
+  end
+
+  @spec maybe_clear_temporary_search_pin(Phoenix.LiveView.Socket.t(), boolean()) ::
+          Phoenix.LiveView.Socket.t()
+  defp maybe_clear_temporary_search_pin(socket, true) do
+    socket
+    |> assign(:selected_map_search_result, nil)
+    |> push_event("clear_temporary_search_pin", %{})
+  end
+
+  defp maybe_clear_temporary_search_pin(socket, false), do: socket
+
+  @spec find_map_search_result([SearchResult.t()], String.t()) :: SearchResult.t() | nil
+  defp find_map_search_result(results, result_id) do
+    Enum.find(results, fn %SearchResult{id: id} -> id == result_id end)
+  end
+
+  @spec prepare_poi_from_search_result(Phoenix.LiveView.Socket.t(), SearchResult.t()) ::
+          Phoenix.LiveView.Socket.t()
+  defp prepare_poi_from_search_result(socket, %SearchResult{} = result) do
+    socket
+    |> cancel_all_photo_uploads()
+    |> assign(:selected_map_object, nil)
+    |> assign(:selected_map_object_can_manage, false)
+    |> assign(:selected_map_object_activity_filter, :all)
+    |> assign(:map_comment_form, to_form(%{"body" => ""}, as: :comment))
+    |> stream(:selected_map_object_entries, [], reset: true)
+    |> assign(:selected_map_search_result, nil)
+    |> assign(:editing_poi_id, nil)
+    |> assign(:editing_poi_published, false)
+    |> assign(:editing_geofence_id, nil)
+    |> assign(:editing_geofence_published, false)
+    |> assign(:geofence_step, :idle)
+    |> assign(:poi_step, :editing)
+    |> assign(:poi_location, result.location)
+    |> assign(:poi_name, poi_name_from_search_result(result))
+    |> assign(:poi_description, "")
+    |> assign(:poi_category, "viewpoint")
+    |> assign(:poi_color, @poi_default_color)
+    |> assign(:poi_errors, [])
+    |> push_event("clear_temporary_search_pin", %{})
+    |> push_event("disable_location_pick", %{})
+    |> push_event("disable_draw_mode", %{})
+  end
+
+  @spec poi_name_from_search_result(SearchResult.t()) :: String.t()
+  defp poi_name_from_search_result(%SearchResult{source: :external, title: title}) do
+    title
+    |> String.split(",", parts: 2)
+    |> List.first()
+    |> case do
+      nil -> title
+      first_part -> String.trim(first_part)
+    end
+    |> blank_to_default(title)
+  end
+
+  defp poi_name_from_search_result(%SearchResult{title: title}), do: title
+
+  @spec blank_to_default(String.t(), String.t()) :: String.t()
+  defp blank_to_default(value, default) do
+    if String.trim(value) == "", do: default, else: value
   end
 
   @spec search_map_sources(Phoenix.LiveView.Socket.t(), String.t()) ::
@@ -1441,6 +1561,24 @@ defmodule PlatserWeb.MapLive do
     %{
       kind: "geofence",
       geometry: Geo.JSON.encode!(geofence.geometry)
+    }
+  end
+
+  @spec temporary_search_pin_payload(SearchResult.t()) :: map()
+  defp temporary_search_pin_payload(%SearchResult{} = result) do
+    %Geo.Point{coordinates: {lng, lat}} = result.location
+
+    %{
+      id: result.id,
+      source: to_string(result.source),
+      source_label: result.source_label,
+      kind: to_string(result.kind),
+      kind_label: result.kind_label,
+      title: result.title,
+      subtitle: result.subtitle,
+      lat: lat,
+      lng: lng,
+      bounds: result.bounds
     }
   end
 
@@ -1889,9 +2027,20 @@ defmodule PlatserWeb.MapLive do
                   <% else %>
                     <div class="divide-y divide-gray-100">
                       <%= for result <- @map_search_results do %>
-                        <article
+                        <button
                           id={map_search_result_dom_id(result)}
-                          class="flex gap-3 px-4 py-3 transition-colors hover:bg-gray-50"
+                          type="button"
+                          phx-click="select_map_search_result"
+                          phx-value-result-id={result.id}
+                          class={[
+                            "flex w-full gap-3 px-4 py-3 text-left transition-colors hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500",
+                            if(
+                              @selected_map_search_result &&
+                                @selected_map_search_result.id == result.id,
+                              do: "bg-blue-50/70",
+                              else: "bg-white"
+                            )
+                          ]}
                         >
                           <div class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-600">
                             <.icon name={map_search_result_icon(result)} class="w-4 h-4" />
@@ -1919,7 +2068,7 @@ defmodule PlatserWeb.MapLive do
                               <% end %>
                             </div>
                           </div>
-                        </article>
+                        </button>
                       <% end %>
                     </div>
                   <% end %>

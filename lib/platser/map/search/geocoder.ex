@@ -172,7 +172,7 @@ defmodule Platser.Map.Search.Geocoder do
        %Result{
          id: result_id(payload),
          source: :external,
-         source_label: "OpenStreetMap",
+         source_label: "Map",
          kind: kind,
          kind_label: kind_label,
          title: title,
@@ -196,7 +196,7 @@ defmodule Platser.Map.Search.Geocoder do
     %Result{
       id: coordinate_result_id(point),
       source: :external,
-      source_label: "OpenStreetMap",
+      source_label: "Map",
       kind: :coordinate,
       kind_label: "Coordinates",
       title: coordinate_title(point),
@@ -217,7 +217,7 @@ defmodule Platser.Map.Search.Geocoder do
     %Result{
       id: coordinate_result_id(point),
       source: :external,
-      source_label: "OpenStreetMap",
+      source_label: "Map",
       kind: :coordinate,
       kind_label: "Coordinates",
       title: display_name || address || coordinate_title(point),

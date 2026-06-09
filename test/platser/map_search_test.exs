@@ -193,7 +193,7 @@ defmodule Platser.MapSearchTest do
       assert %Result{} = result
       assert result.id == "external:nominatim:123"
       assert result.source == :external
-      assert result.source_label == "OpenStreetMap"
+      assert result.source_label == "Map"
       assert result.kind == :category
       assert result.kind_label == "Camp site"
       assert result.title == "Central Camp"
