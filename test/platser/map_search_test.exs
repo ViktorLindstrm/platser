@@ -1,5 +1,6 @@
 defmodule Platser.MapSearchTest do
   use Platser.DataCase, async: false
+  use ExUnitProperties
 
   alias Platser.Events
   alias Platser.Map, as: PlatserMap
@@ -84,6 +85,22 @@ defmodule Platser.MapSearchTest do
       assert Enum.map(results, & &1.id) == ["internal:poi:#{current_poi.id}"]
     end
 
+    test "does not return public POIs to users outside the event" do
+      admin = create_user()
+      outsider = create_user()
+      event = create_event(admin)
+
+      admin
+      |> create_poi!(event, %{
+        name: "Public Event Camp",
+        category: :camp,
+        location: point(18.0, 59.0)
+      })
+      |> publish_poi!(admin)
+
+      assert {:ok, []} = Search.search_internal(event.id, "camp", outsider)
+    end
+
     test "respects POI draft visibility for event members, creators, and admins" do
       admin = create_user()
       member = create_user()
@@ -148,6 +165,29 @@ defmodule Platser.MapSearchTest do
       assert :error = Search.parse_coordinates("59,181")
       assert :error = Search.parse_coordinates("59.0,18.0,extra")
       assert :error = Search.parse_coordinates("59.0 north,18.0 east")
+    end
+
+    property "accepted coordinates are finite WGS84 points stored as longitude latitude" do
+      check all(
+              lat <- StreamData.float(min: -90.0, max: 90.0),
+              lng <- StreamData.float(min: -180.0, max: 180.0),
+              separator <- StreamData.member_of([",", ", ", " "]),
+              max_runs: 50
+            ) do
+        assert {:ok, %Geo.Point{coordinates: {stored_lng, stored_lat}, srid: 4326}} =
+                 Search.parse_coordinates("#{lat}#{separator}#{lng}")
+
+        assert finite?(stored_lat)
+        assert finite?(stored_lng)
+        assert_in_delta stored_lat, lat, 0.0000001
+        assert_in_delta stored_lng, lng, 0.0000001
+      end
+    end
+
+    property "out-of-range coordinate-like input is rejected" do
+      check all({lat, lng} <- invalid_coordinate_pair_gen(), max_runs: 50) do
+        assert :error = Search.parse_coordinates("#{lat},#{lng}")
+      end
     end
   end
 
@@ -384,6 +424,29 @@ defmodule Platser.MapSearchTest do
 
   @spec point(float(), float()) :: Geo.Point.t()
   defp point(lng, lat), do: %Geo.Point{coordinates: {lng, lat}, srid: 4326}
+
+  @spec finite?(float()) :: boolean()
+  defp finite?(value), do: value == value and value - value == 0.0
+
+  @spec invalid_coordinate_pair_gen() :: StreamData.t({float(), float()})
+  defp invalid_coordinate_pair_gen do
+    StreamData.one_of([
+      StreamData.tuple({
+        StreamData.one_of([
+          StreamData.float(min: -1_000.0, max: -90.0001),
+          StreamData.float(min: 90.0001, max: 1_000.0)
+        ]),
+        StreamData.float(min: -180.0, max: 180.0)
+      }),
+      StreamData.tuple({
+        StreamData.float(min: -90.0, max: 90.0),
+        StreamData.one_of([
+          StreamData.float(min: -1_000.0, max: -180.0001),
+          StreamData.float(min: 180.0001, max: 1_000.0)
+        ])
+      })
+    ])
+  end
 
   @spec assert_internal_result(Result.t(), Platser.Map.Poi.t(), String.t()) :: true
   defp assert_internal_result(result, poi, kind_label) do
