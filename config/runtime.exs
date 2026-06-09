@@ -23,6 +23,20 @@ end
 config :platser, PlatserWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+if geocoder_url = System.get_env("PLATSER_GEOCODER_URL") do
+  config :platser, :geocoder_url, geocoder_url
+end
+
+geocoder_contact = System.get_env("PLATSER_GEOCODER_CONTACT")
+
+geocoder_user_agent =
+  case geocoder_contact do
+    contact when is_binary(contact) and contact != "" -> "Platser/0.1 (#{contact})"
+    _ -> "Platser/0.1"
+  end
+
+config :platser, :geocoder_user_agent, geocoder_user_agent
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
