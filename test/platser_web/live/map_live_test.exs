@@ -95,6 +95,11 @@ defmodule PlatserWeb.MapLiveTest do
     poi
   end
 
+  defp list_event_pois(user, event) do
+    {:ok, pois} = PlatserMap.list_pois_for_event(event.id, actor: user)
+    pois
+  end
+
   defp create_geofence(user, event) do
     {:ok, geofence} =
       PlatserMap.create_geofence(
@@ -208,6 +213,42 @@ defmodule PlatserWeb.MapLiveTest do
       assert has_element?(view, "#map-search-results")
       assert has_element?(view, "#map-search-result-internal-poi-#{poi.id}", "Event POI")
       assert has_element?(view, "#map-search-result-external-nominatim-321", "Map")
+    end
+
+    test "clearing the search input clears visible results", %{conn: conn} do
+      user = create_user("search_clear_results")
+      event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 432,
+            "lat" => "59.3293",
+            "lon" => "18.0686",
+            "name" => "Clearable Camp",
+            "display_name" => "Clearable Camp, Stockholm, Sweden",
+            "class" => "tourism",
+            "type" => "camp_site"
+          }
+        ])
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "clearable camp"}
+      })
+
+      assert has_element?(view, "#map-search-results")
+      assert has_element?(view, "#map-search-result-external-nominatim-432")
+
+      render_change(element(view, "#map-search-form"), %{
+        "search" => %{"query" => ""}
+      })
+
+      refute has_element?(view, "#map-search-results")
+      refute has_element?(view, "#map-search-result-external-nominatim-432")
     end
 
     test "search shows a clear no-results state", %{conn: conn} do
@@ -418,6 +459,116 @@ defmodule PlatserWeb.MapLiveTest do
       assert_push_event(view, "clear_temporary_search_pin", %{})
       assert has_element?(view, ~s(#poi-name[value="Central Camp"]))
       assert has_element?(view, "#poi-form", "59.32930, 18.06860")
+      assert list_event_pois(user, event) == []
+    end
+
+    test "temporary pin create action does not create a POI until the existing form is submitted",
+         %{conn: conn} do
+      user = create_user("search_pin_create_submit")
+      event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 654,
+            "lat" => "59.3293",
+            "lon" => "18.0686",
+            "name" => "Draft From Search",
+            "display_name" => "Draft From Search, Stockholm, Sweden",
+            "class" => "tourism",
+            "type" => "camp_site"
+          }
+        ])
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "draft from search"}
+      })
+
+      render_click(element(view, "#map-search-result-external-nominatim-654"))
+      assert_push_event(view, "show_temporary_search_pin", %{id: "external:nominatim:654"})
+
+      render_hook(view, "create_poi_from_search_result", %{})
+      assert_push_event(view, "clear_temporary_search_pin", %{})
+      assert list_event_pois(user, event) == []
+
+      render_submit(element(view, "#poi-form"), %{
+        "poi" => %{
+          "name" => "Draft From Search",
+          "description" => "",
+          "category" => "viewpoint",
+          "color" => "#3B82F6"
+        },
+        "publish" => "false"
+      })
+
+      [poi] = list_event_pois(user, event)
+      assert poi.name == "Draft From Search"
+      assert poi.visibility == :private
+      assert poi.location.coordinates == {18.0686, 59.3293}
+    end
+
+    test "temporary pin create action ignores unsupported hook payloads", %{conn: conn} do
+      user = create_user("search_pin_create_unsupported")
+      event = create_event(user)
+      conn = sign_in_conn(conn, user)
+
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_hook(view, "create_poi_from_search_result", %{
+        "title" => "Injected POI",
+        "lat" => "12.34",
+        "lng" => "56.78"
+      })
+
+      refute has_element?(view, ~s(#poi-name[value="Injected POI"]))
+      refute has_element?(view, "#poi-form", "12.34000, 56.78000")
+      assert list_event_pois(user, event) == []
+    end
+
+    test "temporary pin create action uses the selected result instead of hook coordinates",
+         %{conn: conn} do
+      user = create_user("search_pin_create_selected_only")
+      event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 987,
+            "lat" => "59.3293",
+            "lon" => "18.0686",
+            "name" => "Selected Place",
+            "display_name" => "Selected Place, Stockholm, Sweden",
+            "class" => "place",
+            "type" => "locality"
+          }
+        ])
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "selected place"}
+      })
+
+      render_click(element(view, "#map-search-result-external-nominatim-987"))
+      assert_push_event(view, "show_temporary_search_pin", %{id: "external:nominatim:987"})
+
+      render_hook(view, "create_poi_from_search_result", %{
+        "title" => "Injected POI",
+        "lat" => "12.34",
+        "lng" => "56.78"
+      })
+
+      assert has_element?(view, ~s(#poi-name[value="Selected Place"]))
+      assert has_element?(view, "#poi-form", "59.32930, 18.06860")
+      refute has_element?(view, ~s(#poi-name[value="Injected POI"]))
+      refute has_element?(view, "#poi-form", "12.34000, 56.78000")
+      assert list_event_pois(user, event) == []
     end
 
     test "temporary pin create action shortens map result names to the first place part", %{

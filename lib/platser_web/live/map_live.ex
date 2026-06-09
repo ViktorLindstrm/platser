@@ -376,6 +376,18 @@ defmodule PlatserWeb.MapLive do
     end
   end
 
+  def handle_event("change_map_search", %{"search" => %{"query" => query}}, socket) do
+    if String.trim(query || "") == "" do
+      {:noreply, reset_map_search(socket)}
+    else
+      {:noreply, assign(socket, :map_search_form, to_form(%{"query" => query}, as: :search))}
+    end
+  end
+
+  def handle_event("change_map_search", _params, socket) do
+    {:noreply, socket}
+  end
+
   def handle_event("search_map", %{"search" => %{"query" => query}}, socket) do
     query = String.trim(query || "")
 
@@ -1980,6 +1992,7 @@ defmodule PlatserWeb.MapLive do
               <.form
                 for={@map_search_form}
                 id="map-search-form"
+                phx-change="change_map_search"
                 phx-submit="search_map"
                 class="flex items-start gap-2 px-3 py-3"
               >
