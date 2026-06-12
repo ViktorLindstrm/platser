@@ -9,20 +9,23 @@ defmodule Platser.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      PlatserWeb.Telemetry,
-      Platser.Repo,
-      {DNSCluster, query: Application.get_env(:platser, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: Platser.PubSub},
-      Platser.EventPresence,
-      Platser.Admin.ErrorBuffer,
-      {Task.Supervisor, name: Platser.Privacy.ExportSupervisor},
-      PlatserWeb.JoinRateLimiter,
-      Platser.Map.Search.Geocoder.RateLimiter,
-      # Start to serve requests, typically the last entry
-      PlatserWeb.Endpoint,
-      {AshAuthentication.Supervisor, [otp_app: :platser]}
-    ]
+    children =
+      [
+        PlatserWeb.Telemetry,
+        Platser.Repo,
+        {DNSCluster, query: Application.get_env(:platser, :dns_cluster_query) || :ignore},
+        {Phoenix.PubSub, name: Platser.PubSub},
+        Platser.EventPresence,
+        Platser.Admin.ErrorBuffer,
+        {Task.Supervisor, name: Platser.Privacy.ExportSupervisor},
+        retention_worker_child(),
+        PlatserWeb.JoinRateLimiter,
+        Platser.Map.Search.Geocoder.RateLimiter,
+        # Start to serve requests, typically the last entry
+        PlatserWeb.Endpoint,
+        {AshAuthentication.Supervisor, [otp_app: :platser]}
+      ]
+      |> Enum.reject(&is_nil/1)
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
@@ -43,5 +46,12 @@ defmodule Platser.Application do
   def config_change(changed, _new, removed) do
     PlatserWeb.Endpoint.config_change(changed, removed)
     :ok
+  end
+
+  @spec retention_worker_child() :: Supervisor.child_spec() | nil
+  defp retention_worker_child do
+    if Application.get_env(:platser, :retention_worker_enabled?, true) do
+      {Platser.Privacy.RetentionWorker, []}
+    end
   end
 end

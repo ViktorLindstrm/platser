@@ -1,4 +1,8 @@
 defmodule Platser.Media.Attachment do
+  @opaque_stored_filename_regex ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp)$/
+  @safe_filenames ~w(image.jpg image.png image.webp)
+  @supported_content_types ~w(image/jpeg image/png image/webp)
+
   use Ash.Resource,
     otp_app: :platser,
     domain: Platser.Media,
@@ -41,22 +45,9 @@ defmodule Platser.Media.Attachment do
       change relate_actor(:uploader)
 
       validate fn changeset, _ ->
-        poi_id = Ash.Changeset.get_attribute(changeset, :poi_id)
-        geofence_id = Ash.Changeset.get_attribute(changeset, :geofence_id)
-
-        case {poi_id, geofence_id} do
-          {nil, nil} ->
-            {:error, field: :poi_id, message: "must specify poi_id or geofence_id"}
-
-          {_, nil} ->
-            :ok
-
-          {nil, _} ->
-            {:error,
-             field: :poi_id, message: "use create_for_geofence action for geofence attachments"}
-
-          _ ->
-            {:error, field: :poi_id, message: "cannot set both poi_id and geofence_id"}
+        case validate_parent(changeset, :poi) do
+          :ok -> validate_upload_metadata(changeset)
+          {:error, _} = error -> error
         end
       end
     end
@@ -66,13 +57,9 @@ defmodule Platser.Media.Attachment do
       change relate_actor(:uploader)
 
       validate fn changeset, _ ->
-        poi_id = Ash.Changeset.get_attribute(changeset, :poi_id)
-        geofence_id = Ash.Changeset.get_attribute(changeset, :geofence_id)
-
-        case {poi_id, geofence_id} do
-          {nil, nil} -> {:error, field: :geofence_id, message: "must specify geofence_id"}
-          {nil, _} -> :ok
-          _ -> {:error, field: :geofence_id, message: "cannot set both poi_id and geofence_id"}
+        case validate_parent(changeset, :geofence) do
+          :ok -> validate_upload_metadata(changeset)
+          {:error, _} = error -> error
         end
       end
     end
@@ -121,12 +108,12 @@ defmodule Platser.Media.Attachment do
 
     attribute :filename, :string do
       allow_nil? false
-      description "Original client-supplied filename"
+      description "Privacy-safe display filename"
     end
 
     attribute :stored_filename, :string do
       allow_nil? false
-      description "Server-generated unique filename (UUID prefix)"
+      description "Server-generated opaque filename"
     end
 
     attribute :content_type, :string do
@@ -157,5 +144,67 @@ defmodule Platser.Media.Attachment do
 
   identities do
     identity :unique_path, [:path]
+  end
+
+  @spec validate_parent(Ash.Changeset.t(), :poi | :geofence) :: :ok | {:error, keyword()}
+  defp validate_parent(changeset, :poi) do
+    poi_id = Ash.Changeset.get_attribute(changeset, :poi_id)
+    geofence_id = Ash.Changeset.get_attribute(changeset, :geofence_id)
+
+    case {poi_id, geofence_id} do
+      {nil, nil} ->
+        {:error, field: :poi_id, message: "must specify poi_id or geofence_id"}
+
+      {_, nil} ->
+        :ok
+
+      {nil, _} ->
+        {:error,
+         field: :poi_id, message: "use create_for_geofence action for geofence attachments"}
+
+      _ ->
+        {:error, field: :poi_id, message: "cannot set both poi_id and geofence_id"}
+    end
+  end
+
+  defp validate_parent(changeset, :geofence) do
+    poi_id = Ash.Changeset.get_attribute(changeset, :poi_id)
+    geofence_id = Ash.Changeset.get_attribute(changeset, :geofence_id)
+
+    case {poi_id, geofence_id} do
+      {nil, nil} -> {:error, field: :geofence_id, message: "must specify geofence_id"}
+      {nil, _} -> :ok
+      _ -> {:error, field: :geofence_id, message: "cannot set both poi_id and geofence_id"}
+    end
+  end
+
+  @spec validate_upload_metadata(Ash.Changeset.t()) :: :ok | {:error, keyword()}
+  defp validate_upload_metadata(changeset) do
+    filename = Ash.Changeset.get_attribute(changeset, :filename)
+    stored_filename = Ash.Changeset.get_attribute(changeset, :stored_filename)
+    content_type = Ash.Changeset.get_attribute(changeset, :content_type)
+    path = Ash.Changeset.get_attribute(changeset, :path)
+
+    owner_id =
+      Ash.Changeset.get_attribute(changeset, :poi_id) ||
+        Ash.Changeset.get_attribute(changeset, :geofence_id)
+
+    cond do
+      filename not in @safe_filenames ->
+        {:error, field: :filename, message: "must use a privacy-safe display filename"}
+
+      not is_binary(stored_filename) or
+          not Regex.match?(@opaque_stored_filename_regex, stored_filename) ->
+        {:error, field: :stored_filename, message: "must be an opaque generated image filename"}
+
+      content_type not in @supported_content_types ->
+        {:error, field: :content_type, message: "must be a supported image content type"}
+
+      not is_binary(path) or path != "/uploads/#{owner_id}/#{stored_filename}" ->
+        {:error, field: :path, message: "must match the canonical upload path"}
+
+      true ->
+        :ok
+    end
   end
 end

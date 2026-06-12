@@ -56,7 +56,7 @@ defmodule PlatserWeb.Events.JoinLive do
       <div class="min-h-screen flex items-center justify-center px-4">
         <%= cond do %>
           <% @status == :not_found -> %>
-            <div class="max-w-md w-full text-center space-y-6">
+            <div id="invalid-invite-panel" class="max-w-md w-full text-center space-y-6">
               <div class="w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mx-auto">
                 <.icon name="hero-x-mark" class="w-8 h-8 text-red-500" />
               </div>
@@ -74,7 +74,7 @@ defmodule PlatserWeb.Events.JoinLive do
               </.link>
             </div>
           <% @status == :already_member -> %>
-            <div class="max-w-md w-full space-y-6">
+            <div id="already-member-panel" class="max-w-md w-full space-y-6">
               <div class="bg-base-200 rounded-2xl p-8 text-center space-y-4">
                 <div class="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto">
                   <.icon name="hero-check" class="w-8 h-8 text-green-500" />
@@ -93,7 +93,7 @@ defmodule PlatserWeb.Events.JoinLive do
               </div>
             </div>
           <% @status == :joined -> %>
-            <div class="max-w-md w-full space-y-6">
+            <div id="joined-panel" class="max-w-md w-full space-y-6">
               <div class="bg-base-200 rounded-2xl p-8 text-center space-y-4">
                 <div class="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto animate-bounce">
                   <.icon name="hero-check" class="w-8 h-8 text-green-500" />
@@ -114,7 +114,7 @@ defmodule PlatserWeb.Events.JoinLive do
               </div>
             </div>
           <% @status == :admin -> %>
-            <div class="max-w-md w-full space-y-6">
+            <div id="admin-invite-panel" class="max-w-md w-full space-y-6">
               <div class="bg-base-200 rounded-2xl p-8 space-y-6">
                 <div>
                   <span class="inline-block text-xs font-semibold uppercase tracking-widest text-primary mb-3">
@@ -219,7 +219,7 @@ defmodule PlatserWeb.Events.JoinLive do
             </div>
           <% true -> %>
             <%!-- :show status — authenticated non-member viewing join page --%>
-            <div class="max-w-md w-full space-y-6">
+            <div id="join-invite-panel" class="max-w-md w-full space-y-6">
               <div class="bg-base-200 rounded-2xl p-8 space-y-6">
                 <div>
                   <span class="inline-block text-xs font-semibold uppercase tracking-widest text-primary mb-3">

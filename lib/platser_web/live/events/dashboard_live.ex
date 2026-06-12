@@ -120,6 +120,22 @@ defmodule PlatserWeb.Events.DashboardLive do
     end
   end
 
+  def handle_event("invalidate_code", _params, socket) do
+    actor = socket.assigns.current_user
+    event = socket.assigns.event
+
+    case Events.invalidate_event_join_code(event, actor: actor) do
+      {:ok, updated_event} ->
+        {:noreply,
+         socket
+         |> assign(:event, updated_event)
+         |> put_flash(:info, "Invite code invalidated. Existing members keep access.")}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Could not invalidate invite code.")}
+    end
+  end
+
   def handle_event("update_settings", %{"allow_public_comments" => val}, socket) do
     actor = socket.assigns.current_user
     event = socket.assigns.event
@@ -371,19 +387,27 @@ defmodule PlatserWeb.Events.DashboardLive do
           <div class="flex items-center gap-3">
             <div
               id="join-code-display"
-              class="flex-1 bg-base-200 rounded-xl px-5 py-3 font-mono text-3xl font-bold tracking-widest text-center text-base-content border border-base-300 select-all"
+              class={[
+                "flex-1 bg-base-200 rounded-xl px-5 py-3 font-mono text-3xl font-bold tracking-widest text-center border border-base-300 select-all",
+                if(active_join_code?(@event),
+                  do: "text-base-content",
+                  else: "text-base-content/40 line-through"
+                )
+              ]}
             >
               {@event.join_code}
             </div>
-            <button
-              id="copy-invite-link-btn"
-              phx-hook=".CopyInviteLink"
-              data-join-code={@event.join_code}
-              class="p-3 rounded-xl bg-primary text-primary-content border border-primary hover:brightness-110 transition-all active:scale-95 duration-200"
-              title="Copy invite link to clipboard"
-            >
-              <.icon name="hero-link" class="w-5 h-5" />
-            </button>
+            <%= if active_join_code?(@event) do %>
+              <button
+                id="copy-invite-link-btn"
+                phx-hook=".CopyInviteLink"
+                data-join-code={@event.join_code}
+                class="p-3 rounded-xl bg-primary text-primary-content border border-primary hover:brightness-110 transition-all active:scale-95 duration-200"
+                title="Copy invite link to clipboard"
+              >
+                <.icon name="hero-link" class="w-5 h-5" />
+              </button>
+            <% end %>
             <%= if @is_admin do %>
               <button
                 id="regenerate-code-btn"
@@ -393,14 +417,44 @@ defmodule PlatserWeb.Events.DashboardLive do
               >
                 <.icon name="hero-arrow-path" class="w-5 h-5" />
               </button>
+              <%= if active_join_code?(@event) do %>
+                <button
+                  id="invalidate-code-btn"
+                  phx-click="invalidate_code"
+                  class="p-3 rounded-xl bg-base-100 border border-red-200 hover:bg-red-50 transition-colors text-red-500 hover:text-red-600 dark:border-red-900/40 dark:hover:bg-red-900/20"
+                  title="Invalidate invite code"
+                  data-confirm="Invalidate this invite code? Existing members keep access, but new participants will need a regenerated code."
+                >
+                  <.icon name="hero-no-symbol" class="w-5 h-5" />
+                </button>
+              <% end %>
             <% end %>
           </div>
           <p class="text-xs text-base-content/40">
-            Share this code with participants. They can join at <strong class="font-medium text-base-content/60">/join/{@event.join_code}</strong>.
-            <%= if @is_admin do %>
-              Regenerating invalidates the old code; existing members keep access.
+            <%= cond do %>
+              <% not active_join_code?(@event) -> %>
+                This invite code is inactive. Regenerate it to allow new participants to join.
+              <% @is_admin -> %>
+                Share this code with participants. They can join at <strong class="font-medium text-base-content/60">/join/{@event.join_code}</strong>.
+                Regenerating or invalidating disables the old code; existing members keep access.
+              <% true -> %>
+                Share this code with participants. They can join at <strong class="font-medium text-base-content/60">/join/{@event.join_code}</strong>.
             <% end %>
           </p>
+          <dl class="grid gap-2 text-xs text-base-content/50 sm:grid-cols-3">
+            <div>
+              <dt class="font-semibold text-base-content/60">Expires</dt>
+              <dd>{Calendar.strftime(@event.join_code_expires_at, "%b %-d, %Y %H:%M")} UTC</dd>
+            </div>
+            <div>
+              <dt class="font-semibold text-base-content/60">Rotated</dt>
+              <dd>{Calendar.strftime(@event.join_code_rotated_at, "%b %-d, %Y %H:%M")} UTC</dd>
+            </div>
+            <div>
+              <dt class="font-semibold text-base-content/60">Status</dt>
+              <dd>{join_code_status(@event)}</dd>
+            </div>
+          </dl>
         </section>
 
         <%!-- Event settings (admin only) --%>
@@ -702,6 +756,21 @@ defmodule PlatserWeb.Events.DashboardLive do
   @spec admin?([Membership.t()], Ecto.UUID.t()) :: boolean()
   defp admin?(memberships, user_id) do
     Enum.any?(memberships, &(&1.user_id == user_id and &1.role == :admin))
+  end
+
+  @spec active_join_code?(Event.t()) :: boolean()
+  defp active_join_code?(event) do
+    is_nil(event.join_code_invalidated_at) and
+      DateTime.compare(event.join_code_expires_at, DateTime.utc_now()) == :gt
+  end
+
+  @spec join_code_status(Event.t()) :: String.t()
+  defp join_code_status(event) do
+    cond do
+      not is_nil(event.join_code_invalidated_at) -> "Invalidated"
+      DateTime.compare(event.join_code_expires_at, DateTime.utc_now()) != :gt -> "Expired"
+      true -> "Active"
+    end
   end
 
   @spec format_error(Ash.Error.Invalid.t()) :: String.t()

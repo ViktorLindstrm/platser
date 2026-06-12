@@ -21,10 +21,18 @@ defmodule Platser.Admin.Stats do
           pois: non_neg_integer(),
           geofences: non_neg_integer(),
           attachments: non_neg_integer(),
-          activity_entries: non_neg_integer()
+          activity_entries: non_neg_integer(),
+          retention_runs: non_neg_integer()
         }
 
   @type day_trend :: %{date: Date.t(), count: non_neg_integer()}
+
+  @type retention_summary :: %{
+          last_status: atom() | nil,
+          last_started_at: DateTime.t() | nil,
+          last_completed_at: DateTime.t() | nil,
+          recent_failures: non_neg_integer()
+        }
 
   @type vm_stats :: %{
           memory_total_mb: non_neg_integer(),
@@ -49,6 +57,7 @@ defmodule Platser.Admin.Stats do
     geofences = Platser.Map.Geofence |> Ash.count!(authorize?: false)
     attachments = Platser.Media.Attachment |> Ash.count!(authorize?: false)
     activity_entries = Platser.Activity.Entry |> Ash.count!(authorize?: false)
+    retention_runs = Platser.Privacy.RetentionRun |> Ash.count!(authorize?: false)
 
     %{
       users: users_total,
@@ -59,7 +68,42 @@ defmodule Platser.Admin.Stats do
       pois: pois,
       geofences: geofences,
       attachments: attachments,
-      activity_entries: activity_entries
+      activity_entries: activity_entries,
+      retention_runs: retention_runs
+    }
+  end
+
+  @doc "Returns aggregate retention cleanup status for the admin dashboard."
+  @spec retention_summary() :: retention_summary()
+  def retention_summary do
+    last =
+      Repo.one(
+        from r in "privacy_retention_runs",
+          select: %{
+            status: r.status,
+            started_at: r.started_at,
+            completed_at: r.completed_at
+          },
+          order_by: [desc: r.started_at],
+          limit: 1
+      )
+
+    day_ago = DateTime.add(DateTime.utc_now(:second), -1, :day)
+
+    recent_failures =
+      Repo.aggregate(
+        from(r in "privacy_retention_runs",
+          where: r.status == "failed" and r.started_at >= ^day_ago
+        ),
+        :count,
+        :id
+      )
+
+    %{
+      last_status: status_atom(last && last.status),
+      last_started_at: last && last.started_at,
+      last_completed_at: last && last.completed_at,
+      recent_failures: recent_failures
     }
   end
 
@@ -208,6 +252,21 @@ defmodule Platser.Admin.Stats do
     )
   end
 
+  def detail_rows("retention_runs") do
+    Repo.all(
+      from r in "privacy_retention_runs",
+        select: %{
+          status: r.status,
+          started_at: r.started_at,
+          completed_at: r.completed_at,
+          outcome_counts: r.outcome_counts,
+          failure_reason: r.failure_reason
+        },
+        order_by: [desc: r.started_at],
+        limit: 100
+    )
+  end
+
   def detail_rows(_), do: []
 
   @doc "Returns current BEAM VM statistics."
@@ -235,7 +294,14 @@ defmodule Platser.Admin.Stats do
 
     Map.merge(counts, %{
       recent_activity: recent_activity_count(),
+      retention: retention_summary(),
       vm: vm_stats()
     })
   end
+
+  @spec status_atom(String.t() | nil) :: atom() | nil
+  defp status_atom(nil), do: nil
+  defp status_atom("completed"), do: :completed
+  defp status_atom("failed"), do: :failed
+  defp status_atom(_), do: nil
 end

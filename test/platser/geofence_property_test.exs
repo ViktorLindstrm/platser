@@ -486,7 +486,7 @@ defmodule Platser.GeofencePropertyTest do
   describe "geofence attachments" do
     property "attachments created for a geofence are listed back" do
       check all(
-              filename <- StreamData.string(:alphanumeric, min_length: 3, max_length: 40),
+              _filename <- StreamData.string(:alphanumeric, min_length: 3, max_length: 40),
               max_runs: 15
             ) do
         {user, event} = create_event_with_member()
@@ -510,12 +510,12 @@ defmodule Platser.GeofencePropertyTest do
             actor: user
           )
 
-        stored = "#{Ecto.UUID.generate()}_#{filename}.jpg"
+        stored = "#{Ecto.UUID.generate()}.jpg"
 
         assert {:ok, attachment} =
                  Platser.Media.create_geofence_attachment(
                    %{
-                     filename: "#{filename}.jpg",
+                     filename: "image.jpg",
                      stored_filename: stored,
                      content_type: "image/jpeg",
                      path: "/uploads/#{geofence.id}/#{stored}",
@@ -551,12 +551,12 @@ defmodule Platser.GeofencePropertyTest do
             actor: user
           )
 
-        stored = "#{Ecto.UUID.generate()}_test.jpg"
+        stored = "#{Ecto.UUID.generate()}.jpg"
 
         {:ok, attachment} =
           Platser.Media.create_geofence_attachment(
             %{
-              filename: "test.jpg",
+              filename: "image.jpg",
               stored_filename: stored,
               content_type: "image/jpeg",
               path: "/uploads/#{geofence.id}/#{stored}",

@@ -21,6 +21,7 @@ defmodule PlatserWeb.ProfileLive do
      socket
      |> assign(current_user: current_user)
      |> assign(form: form)
+     |> assign(deletion_form: to_form(%{"confirmation" => ""}, as: :delete))
      |> assign_exports(current_user)
      |> maybe_schedule_export_refresh()}
   end
@@ -61,6 +62,26 @@ defmodule PlatserWeb.ProfileLive do
 
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, "Could not request account export")}
+    end
+  end
+
+  def handle_event("delete_account", %{"delete" => %{"confirmation" => confirmation}}, socket) do
+    if confirmation == "DELETE" do
+      case Privacy.delete_account(socket.assigns.current_user) do
+        {:ok, _result} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Account deleted")
+           |> redirect(to: ~p"/sign-out")}
+
+        {:error, :already_deleted} ->
+          {:noreply, redirect(socket, to: ~p"/sign-out")}
+
+        {:error, _reason} ->
+          {:noreply, put_flash(socket, :error, "Could not delete account")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "Type DELETE to confirm account deletion")}
     end
   end
 
@@ -174,6 +195,45 @@ defmodule PlatserWeb.ProfileLive do
                 </.link>
               </div>
             </div>
+          </div>
+        </section>
+
+        <section class="mt-8 bg-white rounded-lg shadow" id="account-deletion-panel">
+          <div class="px-6 py-6 border-b border-gray-200">
+            <h2 class="text-xl font-semibold text-gray-900">Delete Account</h2>
+            <p class="mt-1 text-sm text-gray-500">
+              Delete sign-in access and anonymize personal account identifiers while preserving event history.
+            </p>
+          </div>
+
+          <div class="px-6 py-6">
+            <.form for={@deletion_form} id="account-deletion-form" phx-submit="delete_account">
+              <div class="space-y-4">
+                <.input
+                  field={@deletion_form[:confirmation]}
+                  type="text"
+                  label="Type DELETE to confirm"
+                  autocomplete="off"
+                />
+
+                <div class="flex flex-col gap-3 sm:flex-row">
+                  <button
+                    id="delete-account-submit"
+                    type="submit"
+                    class="inline-flex items-center justify-center rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700"
+                  >
+                    Delete Account
+                  </button>
+                  <.link
+                    id="delete-account-cancel"
+                    navigate={~p"/events"}
+                    class="inline-flex items-center justify-center rounded-lg bg-gray-200 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-300"
+                  >
+                    Cancel
+                  </.link>
+                </div>
+              </div>
+            </.form>
           </div>
         </section>
       </div>

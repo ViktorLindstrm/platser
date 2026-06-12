@@ -36,7 +36,7 @@ defmodule Platser.Accounts.User do
   end
 
   field_policies do
-    field_policy [:display_name, :is_simulated, :is_guest] do
+    field_policy [:display_name, :is_simulated, :is_guest, :deleted_at] do
       authorize_if always()
     end
 
@@ -115,6 +115,23 @@ defmodule Platser.Accounts.User do
       accept [:superuser]
     end
 
+    update :anonymize_for_deletion do
+      description "Internal: anonymizes credentials and direct identifiers for deleted accounts."
+      require_atomic? false
+      accept [:deleted_at]
+
+      change fn changeset, _context ->
+        id = Ash.Changeset.get_attribute(changeset, :id)
+
+        changeset
+        |> Ash.Changeset.force_change_attribute(:email, "deleted_#{id}@platser.deleted")
+        |> Ash.Changeset.force_change_attribute(:display_name, "Deleted user")
+        |> Ash.Changeset.force_change_attribute(:hashed_password, nil)
+        |> Ash.Changeset.force_change_attribute(:is_guest, false)
+        |> Ash.Changeset.force_change_attribute(:superuser, false)
+      end
+    end
+
     read :get_by_subject do
       description "Get a user by the subject claim in a JWT"
       argument :subject, :string, allow_nil?: false
@@ -159,6 +176,10 @@ defmodule Platser.Accounts.User do
     policy action(:set_superuser) do
       forbid_if always()
     end
+
+    policy action(:anonymize_for_deletion) do
+      forbid_if always()
+    end
   end
 
   attributes do
@@ -169,6 +190,7 @@ defmodule Platser.Accounts.User do
     attribute :is_simulated, :boolean, default: false, public?: true
     attribute :is_guest, :boolean, default: false, public?: true
     attribute :superuser, :boolean, default: false, public?: false
+    attribute :deleted_at, :utc_datetime, public?: true
   end
 
   relationships do

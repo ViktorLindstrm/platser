@@ -39,7 +39,8 @@ Flow:
    and `attachment.stored_filename`. Path-traverse guard (`Path.expand` + prefix check
    against `uploads_root`) ensures the derived path cannot escape the uploads directory.
 4. Stream the file via `send_file/5` with appropriate response headers
-   (`content-type`, `content-disposition: inline`, `cache-control: private`).
+   (`content-type`, `content-disposition: inline` with the opaque stored filename,
+   `cache-control: private`).
 5. On `Ash.Error.Forbidden` → `403 Forbidden`.
 6. On any other error (not found, disk missing) → `404 Not Found`.
 

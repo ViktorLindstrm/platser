@@ -99,6 +99,40 @@ defmodule PlatserWeb.ProfileExportFlowPropertyTest do
     end
   end
 
+  property "profile deletion flow requires confirmation and revokes post-delete access" do
+    check all(
+            display_name <- StreamData.string(:alphanumeric, min_length: 3, max_length: 16),
+            max_runs: 3
+          ) do
+      user = create_user("delete_#{display_name}")
+      conn = sign_in_conn(build_conn(), user)
+
+      {:ok, view, _html} = live(conn, ~p"/profile")
+
+      assert has_element?(view, "#account-deletion-panel")
+      assert has_element?(view, "#account-deletion-form")
+      assert has_element?(view, "#delete-account-cancel")
+
+      view
+      |> form("#account-deletion-form", delete: %{confirmation: "cancel"})
+      |> render_submit()
+
+      refute Ash.get!(User, user.id, authorize?: false).deleted_at
+
+      assert {:error, {:redirect, %{to: "/sign-out"}}} =
+               view
+               |> form("#account-deletion-form", delete: %{confirmation: "DELETE"})
+               |> render_submit()
+
+      deleted_user = Ash.get!(User, user.id, authorize?: false)
+      assert %DateTime{} = deleted_user.deleted_at
+      assert deleted_user.display_name == "Deleted user"
+
+      denied_conn = get(conn, ~p"/profile")
+      assert redirected_to(denied_conn) =~ "/sign-in"
+    end
+  end
+
   @spec create_user(String.t()) :: User.t()
   defp create_user(tag) do
     n = System.unique_integer([:positive])

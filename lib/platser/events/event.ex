@@ -28,16 +28,33 @@ defmodule Platser.Events.Event do
     end
 
     read :get_by_join_code do
-      description "Look up an event by its invite join code. Any authenticated user may call this."
+      description "Look up an event by its active invite join code."
       get? true
       argument :join_code, :string, allow_nil?: false
-      filter expr(join_code == ^arg(:join_code))
+
+      filter expr(
+               join_code == ^arg(:join_code) and is_nil(join_code_invalidated_at) and
+                 join_code_expires_at > now()
+             )
     end
 
     update :regenerate_join_code do
       description "Replaces the event's join code with a freshly generated one."
       require_atomic? false
       change Platser.Events.Changes.GenerateJoinCode
+    end
+
+    update :invalidate_join_code do
+      description "Invalidates the current event join code without issuing a replacement."
+      require_atomic? false
+
+      change fn changeset, _context ->
+        Ash.Changeset.force_change_attribute(
+          changeset,
+          :join_code_invalidated_at,
+          DateTime.utc_now(:second)
+        )
+      end
     end
 
     update :update_settings do
@@ -83,6 +100,10 @@ defmodule Platser.Events.Event do
       authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
     end
 
+    policy action(:invalidate_join_code) do
+      authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
+    end
+
     policy action(:update_settings) do
       authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
     end
@@ -117,6 +138,16 @@ defmodule Platser.Events.Event do
       allow_nil? false
       sensitive? true
     end
+
+    attribute :join_code_expires_at, :utc_datetime do
+      allow_nil? false
+    end
+
+    attribute :join_code_rotated_at, :utc_datetime do
+      allow_nil? false
+    end
+
+    attribute :join_code_invalidated_at, :utc_datetime
 
     attribute :bounds, Platser.Types.Geometry
 
