@@ -10,6 +10,7 @@
 
 - Follow ADR-0029 for authorized upload delivery through `PlatserWeb.MediaController` and `Media.Attachment` Ash policies.
 - Follow ADR-0033 for join-flow throttling, user read scoping, and email visibility.
+- Follow ADR-0036 for self-service DSAR account exports, artifact retention, and protected download delivery.
 - Keep authorization decisions in Ash resources whenever possible; controller plugs may reject traffic before Ash when handling abuse controls such as rate limiting.
 - Use existing dependencies and framework primitives. Do not add an HTTP client, broad security framework, or non-StreamData property testing dependency for this P0 scope.
 
@@ -24,6 +25,13 @@
 - Task #61 added supervised ETS-backed throttling on `GET /join/:code` and `POST /guest-join/:code`.
 - Task #66 is implemented. `Accounts.User` read scope is limited to self, same-event identity, and superusers. Field policies keep `display_name` available for collaboration surfaces while hiding `email` from same-event non-self reads.
 - Task #83 quality gate is complete. ADR-0033 matches the final implementation, `mix compile --warnings-as-errors` passes, and `mix precommit` passes.
+- Task #68 is completed.
+  - Reviewed ADR-0004, ADR-0009, ADR-0012, ADR-0029, ADR-0033, and ADR-0035 before implementation.
+  - Added ADR-0036 for DSAR export format, asynchronous generation, artifact storage, protected download delivery, and seven-day expiry.
+  - Added `Platser.Privacy.Export`, `Platser.Privacy.ExportBuilder`, and `Platser.Privacy.ExportStore` to request, build, retain, and authorize account export artifacts.
+  - Added a profile-page export request/status/download UI and a protected download controller route.
+  - Added StreamData coverage for export completeness/isolation and web request/download states.
+  - `mix compile --warnings-as-errors` and `mix precommit` pass.
 
 ## Task Sequence
 
@@ -49,6 +57,14 @@
    - Reviewed ADR-0029 and ADR-0033 against the final implementation.
    - Ran `mix compile --warnings-as-errors`; it passed.
    - Ran `mix precommit`; it passed after replacing narrow filtered StreamData tick-count generators with direct bounded integer generators in `Platser.GpsSimulatorPropertyTest`.
+
+5. Task #68: implement DSAR export flow. Completed.
+   - Created a user-linked data inventory for account profile, auth token metadata, memberships, member events, created map objects and comments, authored activity/check-ins, and uploaded media metadata.
+   - Added policy-backed export request records plus asynchronous JSON artifact generation outside static serving.
+   - Added a protected `/privacy/exports/:id/download` controller path with owner/superuser authorization, completed-state enforcement, path derivation from export id, and expiry rejection.
+   - Added profile UI for requesting an export and viewing status/download availability.
+   - Added StreamData property tests for generated histories, cross-user exclusion, request flow, authorization denial, pending/completed/expired download states.
+   - Ran `mix compile --warnings-as-errors` and `mix precommit`; both passed.
 
 ## Notes For Implementation
 

@@ -34,7 +34,9 @@ platser-*.tar
 # User-uploaded files
 /priv/static/uploads/
 
+# DSAR export artifacts
+/priv/dsar_exports/
+
 # In case you use Node.js/npm, you want to ignore these.
 npm-debug.log
 /assets/node_modules/
-

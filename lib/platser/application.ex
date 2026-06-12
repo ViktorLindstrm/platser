@@ -16,6 +16,7 @@ defmodule Platser.Application do
       {Phoenix.PubSub, name: Platser.PubSub},
       Platser.EventPresence,
       Platser.Admin.ErrorBuffer,
+      {Task.Supervisor, name: Platser.Privacy.ExportSupervisor},
       PlatserWeb.JoinRateLimiter,
       Platser.Map.Search.Geocoder.RateLimiter,
       # Start to serve requests, typically the last entry
