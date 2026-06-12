@@ -54,7 +54,7 @@ defmodule Platser.GpsSimulatorPropertyTest do
     simulator = start_supervisor_for(event.id)
 
     check all(
-            n <- StreamData.positive_integer() |> StreamData.filter(&(&1 <= @max_ticks)),
+            n <- StreamData.integer(1..@max_ticks),
             lat <- StreamData.float(min: -70.0, max: 70.0),
             lng <- StreamData.float(min: -170.0, max: 170.0)
           ) do
@@ -82,7 +82,7 @@ defmodule Platser.GpsSimulatorPropertyTest do
     simulator = start_supervisor_for(event.id)
 
     check all(
-            n <- StreamData.positive_integer() |> StreamData.filter(&(&1 <= @max_ticks)),
+            n <- StreamData.integer(1..@max_ticks),
             start_lat <- StreamData.float(min: -60.0, max: 60.0),
             start_lng <- StreamData.float(min: -150.0, max: 150.0),
             delta_lat <- StreamData.float(min: 0.01, max: 2.0),
@@ -122,7 +122,7 @@ defmodule Platser.GpsSimulatorPropertyTest do
     simulator = start_supervisor_for(event.id)
 
     check all(
-            n <- StreamData.positive_integer() |> StreamData.filter(&(&1 <= @max_ticks)),
+            n <- StreamData.integer(1..@max_ticks),
             lat <- StreamData.float(min: -70.0, max: 70.0),
             lng <- StreamData.float(min: -170.0, max: 170.0)
           ) do
@@ -148,7 +148,7 @@ defmodule Platser.GpsSimulatorPropertyTest do
     simulator = start_supervisor_for(event.id)
 
     check all(
-            n <- StreamData.positive_integer() |> StreamData.filter(&(&1 <= @max_ticks)),
+            n <- StreamData.integer(1..@max_ticks),
             lat <- StreamData.float(min: -50.0, max: 50.0),
             lng <- StreamData.float(min: -120.0, max: 120.0)
           ) do
