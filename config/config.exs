@@ -50,7 +50,18 @@ config :spark,
 config :platser,
   ecto_repos: [Platser.Repo],
   generators: [timestamp_type: :utc_datetime],
-  ash_domains: [Platser.Activity, Platser.Media, Platser.Map, Platser.Events, Platser.Accounts]
+  ash_domains: [
+    Platser.Privacy,
+    Platser.Activity,
+    Platser.Media,
+    Platser.Map,
+    Platser.Events,
+    Platser.Accounts
+  ]
+
+config :platser,
+       :privacy_exports_root,
+       Path.expand("../priv/dsar_exports", __DIR__)
 
 config :platser,
        :pmtiles_url,

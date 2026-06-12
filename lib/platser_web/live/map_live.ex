@@ -13,6 +13,7 @@ defmodule PlatserWeb.MapLive do
   alias Platser.Map.Search.Result, as: SearchResult
   alias Platser.Media
   alias Platser.Media.Attachment
+  alias Platser.Media.Upload
   alias PlatserWeb.MapInspection
 
   @default_map_url "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -1166,43 +1167,41 @@ defmodule PlatserWeb.MapLive do
           Platser.Accounts.User.t()
         ) :: [String.t()]
   defp handle_photo_uploads(socket, poi, actor) do
-    dir = uploads_dir_for(poi.id)
-    File.mkdir_p!(dir)
+    {_completed_entries, in_progress_entries} = uploaded_entries(socket, :photos)
 
+    if in_progress_entries != [] do
+      require Logger
+      Logger.warning("Skipped photo uploads because entries were not completed")
+      []
+    else
+      consume_poi_photo_uploads(socket, poi, actor)
+    end
+  end
+
+  @spec consume_poi_photo_uploads(
+          Phoenix.LiveView.Socket.t(),
+          Poi.t(),
+          Platser.Accounts.User.t()
+        ) :: [String.t()]
+  defp consume_poi_photo_uploads(socket, poi, actor) do
     consume_uploaded_entries(socket, :photos, fn %{path: tmp_path}, entry ->
-      stored_filename = "#{Ecto.UUID.generate()}_#{Path.basename(entry.client_name)}"
-      dest = Path.join(dir, stored_filename)
-
-      case File.cp(tmp_path, dest) do
-        :ok ->
-          url_path = "/uploads/#{poi.id}/#{stored_filename}"
-
+      case Upload.store_photo(tmp_path, entry, poi.id) do
+        {:ok, metadata} ->
           Platser.Media.create_attachment(
-            %{
-              filename: entry.client_name,
-              stored_filename: stored_filename,
-              content_type: entry.client_type,
-              path: url_path,
-              poi_id: poi.id
-            },
+            Map.put(metadata, :poi_id, poi.id),
             actor: actor,
             authorize?: false
           )
 
-          {:ok, url_path}
+          {:ok, metadata.path}
 
         {:error, reason} ->
           require Logger
-          Logger.warning("Failed to copy upload #{entry.client_name}: #{inspect(reason)}")
+          Logger.warning("Rejected uploaded photo: #{inspect(reason)}")
           {:ok, nil}
       end
     end)
     |> Enum.reject(&is_nil/1)
-  end
-
-  @spec uploads_dir_for(Ecto.UUID.t()) :: String.t()
-  defp uploads_dir_for(owner_id) do
-    Application.app_dir(:platser, "priv/static/uploads/#{owner_id}")
   end
 
   @spec handle_photo_uploads_for_geofence(
@@ -1211,34 +1210,37 @@ defmodule PlatserWeb.MapLive do
           Platser.Accounts.User.t()
         ) :: [String.t()]
   defp handle_photo_uploads_for_geofence(socket, geofence, actor) do
-    dir = uploads_dir_for(geofence.id)
-    File.mkdir_p!(dir)
+    {_completed_entries, in_progress_entries} = uploaded_entries(socket, :photos)
 
+    if in_progress_entries != [] do
+      require Logger
+      Logger.warning("Skipped photo uploads because entries were not completed")
+      []
+    else
+      consume_geofence_photo_uploads(socket, geofence, actor)
+    end
+  end
+
+  @spec consume_geofence_photo_uploads(
+          Phoenix.LiveView.Socket.t(),
+          Geofence.t(),
+          Platser.Accounts.User.t()
+        ) :: [String.t()]
+  defp consume_geofence_photo_uploads(socket, geofence, actor) do
     consume_uploaded_entries(socket, :photos, fn %{path: tmp_path}, entry ->
-      stored_filename = "#{Ecto.UUID.generate()}_#{Path.basename(entry.client_name)}"
-      dest = Path.join(dir, stored_filename)
-
-      case File.cp(tmp_path, dest) do
-        :ok ->
-          url_path = "/uploads/#{geofence.id}/#{stored_filename}"
-
+      case Upload.store_photo(tmp_path, entry, geofence.id) do
+        {:ok, metadata} ->
           Platser.Media.create_geofence_attachment(
-            %{
-              filename: entry.client_name,
-              stored_filename: stored_filename,
-              content_type: entry.client_type,
-              path: url_path,
-              geofence_id: geofence.id
-            },
+            Map.put(metadata, :geofence_id, geofence.id),
             actor: actor,
             authorize?: false
           )
 
-          {:ok, url_path}
+          {:ok, metadata.path}
 
         {:error, reason} ->
           require Logger
-          Logger.warning("Failed to copy upload #{entry.client_name}: #{inspect(reason)}")
+          Logger.warning("Rejected uploaded photo: #{inspect(reason)}")
           {:ok, nil}
       end
     end)
@@ -1433,6 +1435,7 @@ defmodule PlatserWeb.MapLive do
   @spec cancel_all_photo_uploads(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   defp cancel_all_photo_uploads(socket) do
     socket.assigns.uploads.photos.entries
+    |> Enum.reject(&(&1.progress == 100))
     |> Enum.reduce(socket, fn entry, acc ->
       cancel_upload(acc, :photos, entry.ref)
     end)

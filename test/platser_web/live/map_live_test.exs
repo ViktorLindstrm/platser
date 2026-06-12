@@ -128,13 +128,15 @@ defmodule PlatserWeb.MapLiveTest do
   end
 
   defp create_attachment(user, poi) do
+    stored_filename = "#{Ecto.UUID.generate()}.jpg"
+
     {:ok, attachment} =
       Media.create_attachment(
         %{
-          filename: "photo.jpg",
-          stored_filename: "uuid_photo.jpg",
+          filename: "image.jpg",
+          stored_filename: stored_filename,
           content_type: "image/jpeg",
-          path: "/uploads/#{poi.id}/uuid_photo.jpg",
+          path: "/uploads/#{poi.id}/#{stored_filename}",
           poi_id: poi.id
         },
         actor: user,
@@ -1072,6 +1074,86 @@ defmodule PlatserWeb.MapLiveTest do
     assert has_element?(view, "#photo-#{attachment.id}")
   end
 
+  describe "photo uploads privacy hardening" do
+    property "new POI uploads persist opaque filenames and sanitized bytes" do
+      check all(client_name <- upload_client_name_gen(), max_runs: 5) do
+        user = create_user("upload_privacy")
+        event = create_event(user)
+        conn = sign_in_conn(build_conn(), user)
+
+        {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+        render_hook(view, "poi_location_picked", %{"lat" => -36.8485, "lng" => 174.7633})
+
+        upload =
+          file_input(view, "#poi-form", :photos, [
+            %{
+              name: client_name,
+              content: upload_jpeg_with_metadata(),
+              size: byte_size(upload_jpeg_with_metadata()),
+              type: "image/jpeg"
+            }
+          ])
+
+        render_upload(upload, client_name)
+
+        render_submit(element(view, "#poi-form"), %{
+          "poi" => %{
+            "name" => "Upload Privacy POI",
+            "description" => "",
+            "category" => "viewpoint"
+          },
+          "publish" => "false"
+        })
+
+        [poi] = list_event_pois(user, event)
+        {:ok, [attachment]} = Media.list_attachments_for_poi(poi.id, actor: user)
+
+        refute attachment.stored_filename == client_name
+        assert Path.basename(attachment.path) == attachment.stored_filename
+        assert attachment.filename == "image.jpg"
+        assert attachment.content_type == "image/jpeg"
+
+        assert attachment.stored_filename =~
+                 ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$/
+
+        stored_bytes = File.read!(Platser.Media.DiskPath.for_attachment(attachment))
+        refute Platser.Media.Upload.contains_sensitive_metadata?(stored_bytes)
+      end
+    end
+
+    property "unsupported upload names are rejected before persistence" do
+      check all(client_name <- rejected_upload_client_name_gen(), max_runs: 3) do
+        user = create_user("upload_reject")
+        event = create_event(user)
+        conn = sign_in_conn(build_conn(), user)
+
+        {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+        render_hook(view, "poi_location_picked", %{"lat" => -36.8485, "lng" => 174.7633})
+
+        upload =
+          file_input(view, "#poi-form", :photos, [
+            %{name: client_name, content: "not an accepted image", size: 21, type: "text/plain"}
+          ])
+
+        render_upload(upload, client_name)
+
+        render_submit(element(view, "#poi-form"), %{
+          "poi" => %{
+            "name" => "Rejected Upload POI",
+            "description" => "",
+            "category" => "viewpoint"
+          },
+          "publish" => "false"
+        })
+
+        [poi] = list_event_pois(user, event)
+        assert {:ok, []} = Media.list_attachments_for_poi(poi.id, actor: user)
+      end
+    end
+  end
+
   test "filter chips reset the activity feed stream", %{conn: conn} do
     user = create_user("activity_filters")
     event = create_event(user)
@@ -1279,6 +1361,39 @@ defmodule PlatserWeb.MapLiveTest do
       assert String.contains?(rendered_link, ~p"/events/#{event.id}/dashboard")
     end
   end
+
+  defp upload_client_name_gen do
+    StreamData.one_of([
+      StreamData.constant("IMG_0001 private gps.jpg"),
+      StreamData.constant("passport.scan.jpeg"),
+      StreamData.constant("family-location-2026.JPG"),
+      StreamData.map(
+        StreamData.string(:alphanumeric, min_length: 1, max_length: 18),
+        &(&1 <> ".jpg")
+      )
+    ])
+  end
+
+  defp rejected_upload_client_name_gen do
+    StreamData.one_of([
+      StreamData.constant("private.gif"),
+      StreamData.constant("secret.txt"),
+      StreamData.map(
+        StreamData.string(:alphanumeric, min_length: 1, max_length: 18),
+        &(&1 <> ".pdf")
+      )
+    ])
+  end
+
+  defp upload_jpeg_with_metadata do
+    <<0xFF, 0xD8>> <>
+      upload_jpeg_segment(0xE1, "Exif\x00\x00private-gps") <>
+      upload_jpeg_segment(0xFE, "XMP private comment") <>
+      upload_jpeg_segment(0xDB, <<0::64>>) <>
+      <<0xFF, 0xDA, 0, 8, 1, 1, 0, 0, 63, 0, 1, 2, 3, 0xFF, 0xD9>>
+  end
+
+  defp upload_jpeg_segment(marker, data), do: <<0xFF, marker, byte_size(data) + 2::16>> <> data
 
   describe "map bounds computation (task #45)" do
     property "computed bounds from any POI set always contains all POI coordinates" do

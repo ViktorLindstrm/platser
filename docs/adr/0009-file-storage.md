@@ -1,7 +1,8 @@
 # ADR-0009: File Storage — Phoenix LiveView Native Uploads
 
 ## Status
-Accepted (amended by ADR-0029 — authorized delivery replaces public Plug.Static serving)
+Accepted (amended by ADR-0029 — authorized delivery replaces public Plug.Static serving;
+amended by ADR-0035 — uploaded images are sanitized and stored with opaque filenames)
 
 ## Context
 POIs support rich media: photos uploaded by event participants. We need a file storage
@@ -18,17 +19,18 @@ Use **Phoenix LiveView's native file upload system** (`allow_upload` / `consume_
 with plain `File.cp` for local disk storage.
 
 - No extra Hex dependencies required — Phoenix LiveView ships with first-class upload support.
-- Files are stored at `priv/static/uploads/{poi_id}/{uuid}_{original_filename}`.
-- Phoenix's static plug serves the files at `/uploads/...` in dev; a CDN or object-store proxy
-  serves them in production.
+- Files are stored at `priv/static/uploads/{owner_id}/{uuid}.{extension}` after image
+  container sanitization.
+- Files are served through the authorized `/uploads/...` controller route from ADR-0029.
 - A custom Ash resource `Media.Attachment` stores file metadata:
-  - `filename` (original name), `stored_filename` (server-generated unique name),
+  - `filename` (privacy-safe display name), `stored_filename` (server-generated opaque name),
     `content_type`, `path` (relative URL), `file_size` (bytes), `poi_id` (FK), `uploader_id` (FK).
 
 ### Upload flow
 1. LiveView declares `allow_upload(:photos, accept: ~w(.jpg .jpeg .png .webp), max_entries: 5,
    max_file_size: 10_000_000)` in `mount/3`.
-2. On form submit, `consume_uploaded_entries/3` streams each file to disk.
+2. On form submit, `consume_uploaded_entries/3` sanitizes each image container and writes
+   the sanitized bytes to disk with an opaque filename.
 3. After the POI is created, one `Media.Attachment` record is inserted per uploaded file.
 4. If publishing, the publish action runs after attachments are persisted.
 

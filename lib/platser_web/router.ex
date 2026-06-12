@@ -45,6 +45,7 @@ defmodule PlatserWeb.Router do
     post "/upgrade-account", GuestController, :upgrade_account
 
     get "/uploads/*path", MediaController, :show
+    get "/privacy/exports/:id/download", PrivacyExportController, :download
   end
 
   scope "/", PlatserWeb do

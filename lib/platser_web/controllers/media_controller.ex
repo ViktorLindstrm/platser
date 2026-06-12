@@ -49,7 +49,7 @@ defmodule PlatserWeb.MediaController do
         |> put_resp_content_type(attachment.content_type)
         |> put_resp_header(
           "content-disposition",
-          ~s(inline; filename="#{attachment.filename}")
+          ~s(inline; filename="#{attachment.stored_filename}")
         )
         |> put_resp_header("cache-control", "private, max-age=3600")
         |> send_file(200, disk_path)

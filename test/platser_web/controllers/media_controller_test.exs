@@ -44,7 +44,10 @@ defmodule PlatserWeb.MediaControllerTest do
       assert response(conn, 200) == @content
       assert get_resp_header(conn, "content-type") == ["image/jpeg; charset=utf-8"]
       assert get_resp_header(conn, "cache-control") == ["private, max-age=3600"]
-      assert get_resp_header(conn, "content-disposition") == [~s(inline; filename="photo.jpg")]
+
+      assert get_resp_header(conn, "content-disposition") == [
+               ~s(inline; filename="#{attachment.stored_filename}")
+             ]
     end
 
     test "returns not found when authorized metadata exists but the file is missing", %{
@@ -87,12 +90,12 @@ defmodule PlatserWeb.MediaControllerTest do
     user = create_user("#{tag}_owner")
     event = create_event(user)
     poi = create_poi(user, event)
-    stored_filename = "#{System.unique_integer([:positive])}_photo.jpg"
+    stored_filename = "#{Ecto.UUID.generate()}.jpg"
 
     {:ok, attachment} =
       Media.create_attachment(
         %{
-          filename: "photo.jpg",
+          filename: "image.jpg",
           stored_filename: stored_filename,
           content_type: "image/jpeg",
           path: "/uploads/#{poi.id}/#{stored_filename}",

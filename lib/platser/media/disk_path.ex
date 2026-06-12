@@ -6,7 +6,7 @@ defmodule Platser.Media.DiskPath do
   (never from raw URL input) and validates it stays within the uploads root.
   """
 
-  @uploads_root Path.expand("priv/static/uploads", :code.priv_dir(:platser))
+  @uploads_root Path.expand(Application.app_dir(:platser, "priv/static/uploads"))
 
   @doc """
   Returns the uploads root directory as an absolute path.

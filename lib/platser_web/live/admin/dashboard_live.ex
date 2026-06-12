@@ -108,7 +108,7 @@ defmodule PlatserWeb.Admin.DashboardLive do
             <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-500 mb-4">
               Current Activity
             </h2>
-            <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
               <.stat_card
                 label="Active Processes"
                 value={@stats.vm.process_count}
@@ -120,6 +120,15 @@ defmodule PlatserWeb.Admin.DashboardLive do
                 value={@stats.recent_activity}
                 icon="hero-bolt"
                 color="amber"
+              />
+              <.stat_card
+                label="Retention Runs"
+                value={@stats.retention_runs}
+                icon="hero-shield-check"
+                color="teal"
+                subtitle={retention_subtitle(@stats.retention)}
+                click_key="retention_runs"
+                selected={@detail_key == "retention_runs"}
               />
               <.stat_card
                 label="Run Queue"
@@ -587,6 +596,49 @@ defmodule PlatserWeb.Admin.DashboardLive do
               </tr>
             <% end %>
           </tbody>
+        <% @key == "retention_runs" -> %>
+          <thead>
+            <tr class="border-b border-gray-800 bg-gray-900/40">
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Status
+              </th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Started
+              </th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Outcomes
+              </th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Failure
+              </th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-800/50">
+            <%= for row <- @data do %>
+              <tr class="hover:bg-gray-800/30 transition-colors">
+                <td class="px-4 py-2 text-xs">
+                  <span class={[
+                    "inline-flex text-xs rounded px-1.5 py-0.5 border",
+                    if(row.status == "completed",
+                      do: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+                      else: "bg-red-500/10 text-red-400 border-red-500/20"
+                    )
+                  ]}>
+                    {row.status}
+                  </span>
+                </td>
+                <td class="px-4 py-2 text-gray-500 text-xs font-mono">
+                  {format_short_dt(row.started_at)}
+                </td>
+                <td class="px-4 py-2 text-gray-400 text-xs font-mono">
+                  {format_counts(row.outcome_counts)}
+                </td>
+                <td class="px-4 py-2 text-gray-400 text-xs">
+                  {row.failure_reason || "—"}
+                </td>
+              </tr>
+            <% end %>
+          </tbody>
         <% true -> %>
       <% end %>
     </table>
@@ -725,7 +777,31 @@ defmodule PlatserWeb.Admin.DashboardLive do
   defp detail_panel_title("geofences"), do: "All Geofences"
   defp detail_panel_title("attachments"), do: "All Attachments"
   defp detail_panel_title("activity_entries"), do: "Activity Log Entries"
+  defp detail_panel_title("retention_runs"), do: "Retention Cleanup Runs"
   defp detail_panel_title(_), do: "Detail View"
+
+  @spec retention_subtitle(map()) :: String.t()
+  defp retention_subtitle(%{last_status: nil}), do: "not run yet"
+
+  defp retention_subtitle(%{last_status: status, recent_failures: failures}) when failures > 0 do
+    "#{status} · #{failures} failures"
+  end
+
+  defp retention_subtitle(%{last_status: status}), do: to_string(status)
+
+  @spec format_counts(map() | nil) :: String.t()
+  defp format_counts(nil), do: "—"
+
+  defp format_counts(counts) do
+    counts
+    |> Enum.reject(fn {_key, value} -> value in [nil, 0] end)
+    |> Enum.map(fn {key, value} -> "#{key}: #{value}" end)
+    |> Enum.join(", ")
+    |> case do
+      "" -> "no changes"
+      text -> text
+    end
+  end
 
   @spec format_short_dt(DateTime.t() | NaiveDateTime.t() | nil) :: String.t()
   defp format_short_dt(nil), do: "—"

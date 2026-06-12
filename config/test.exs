@@ -35,6 +35,8 @@ config :platser,
        :geocoder_rate_limit_public?,
        false
 
+config :platser, :retention_worker_enabled?, false
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 
