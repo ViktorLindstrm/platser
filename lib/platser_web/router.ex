@@ -20,6 +20,10 @@ defmodule PlatserWeb.Router do
     plug :set_actor, :user
   end
 
+  pipeline :join_rate_limit do
+    plug PlatserWeb.Plugs.JoinRateLimit
+  end
+
   scope "/", PlatserWeb do
     pipe_through :browser
 
@@ -38,10 +42,15 @@ defmodule PlatserWeb.Router do
     sign_out_route AuthController
     auth_routes AuthController, Platser.Accounts.User, path: "/auth"
 
-    post "/guest-join/:code", GuestController, :guest_join
     post "/upgrade-account", GuestController, :upgrade_account
 
     get "/uploads/*path", MediaController, :show
+  end
+
+  scope "/", PlatserWeb do
+    pipe_through [:browser, :join_rate_limit]
+
+    post "/guest-join/:code", GuestController, :guest_join
   end
 
   # Publicly accessible join page — works for unauthenticated AND authenticated users.
@@ -53,7 +62,7 @@ defmodule PlatserWeb.Router do
       {PlatserWeb.LiveUserAuth, :live_user_optional}
     ] do
     scope "/", PlatserWeb do
-      pipe_through :browser
+      pipe_through [:browser, :join_rate_limit]
 
       live "/join/:code", Events.JoinLive
     end

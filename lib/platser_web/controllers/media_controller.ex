@@ -2,6 +2,7 @@ defmodule PlatserWeb.MediaController do
   use PlatserWeb, :controller
 
   alias Platser.Media.DiskPath
+  alias Ash.Error.Forbidden
 
   @doc """
   Serves an uploaded file after verifying event-membership authorization via Ash policies.
@@ -22,6 +23,9 @@ defmodule PlatserWeb.MediaController do
       case Platser.Media.get_attachment_by_path(canonical_path, actor: actor) do
         {:ok, attachment} ->
           serve_file(conn, attachment)
+
+        {:error, %Forbidden{}} ->
+          send_resp(conn, 403, "Forbidden")
 
         _ ->
           send_resp(conn, 404, "Not Found")

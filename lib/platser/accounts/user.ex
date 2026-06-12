@@ -35,6 +35,17 @@ defmodule Platser.Accounts.User do
     end
   end
 
+  field_policies do
+    field_policy [:display_name, :is_simulated, :is_guest] do
+      authorize_if always()
+    end
+
+    field_policy :email do
+      authorize_if expr(id == ^actor(:id))
+      authorize_if actor_attribute_equals(:superuser, true)
+    end
+  end
+
   actions do
     defaults [:read]
 
@@ -118,7 +129,15 @@ defmodule Platser.Accounts.User do
     end
 
     policy action_type(:read) do
-      authorize_if actor_present()
+      authorize_if expr(id == ^actor(:id))
+      authorize_if actor_attribute_equals(:superuser, true)
+
+      authorize_if expr(
+                     exists(
+                       memberships,
+                       exists(event.memberships, user_id == ^actor(:id))
+                     )
+                   )
     end
 
     policy action(:create_simulated) do
@@ -150,6 +169,10 @@ defmodule Platser.Accounts.User do
     attribute :is_simulated, :boolean, default: false, public?: true
     attribute :is_guest, :boolean, default: false, public?: true
     attribute :superuser, :boolean, default: false, public?: false
+  end
+
+  relationships do
+    has_many :memberships, Platser.Events.Membership
   end
 
   identities do

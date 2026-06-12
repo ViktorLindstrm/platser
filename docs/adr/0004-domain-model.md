@@ -1,7 +1,7 @@
 # ADR-0004: Core Domain Model
 
 ## Status
-Accepted
+Accepted (amended by ADR-0033 - user reads and email visibility are now scoped)
 
 ## Context
 We need a clear, stable domain model that covers all the collaborative map-sharing features
@@ -127,12 +127,11 @@ Ash policies enforce:
 - Private objects are only visible to their creator (and event admin)
 
 #### `Accounts.User` read policy
-Any authenticated actor may read `Accounts.User` records
-(`authorize_if actor_present()`). This is required so that event members
-can see each other's `display_name` and initials in member lists and on the
-map. User records contain no sensitive data beyond `email` and `display_name`
-— the `hashed_password` field is marked `sensitive?: true` and is never
-returned by read actions.
+Amended by ADR-0033. `Accounts.User` records are no longer broadly readable
+by any authenticated actor. Reads must be scoped to self, same-event identity
+needs, event-admin use cases, or superuser administration. Event collaboration
+surfaces should use `display_name`; email visibility is restricted to self and
+explicit administrative cases.
 
 #### Member list visibility
 The `Membership.list_for_event` action is readable by **all event members**
