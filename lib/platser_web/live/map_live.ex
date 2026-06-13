@@ -56,6 +56,12 @@ defmodule PlatserWeb.MapLive do
           item: Poi.t() | Geofence.t(),
           attachments: [Attachment.t()]
         }
+  @type member_access_summary :: %{
+          manager?: boolean(),
+          full_manager?: boolean(),
+          member_count: non_neg_integer(),
+          full_manager_count: non_neg_integer()
+        }
   @type editing_id :: Ecto.UUID.t() | nil
   @type search_state :: :idle | :results | :empty | :error
   @type map_search_limit :: 1..40
@@ -80,13 +86,16 @@ defmodule PlatserWeb.MapLive do
       case load_event(event_id, actor) do
         {:ok, event} ->
           {pois, geofences, entries, check_ins} = load_map_data(event_id, actor, :all)
-          is_admin = manager_member?(event_id, actor.id, actor)
+          member_access = member_access_summary(event_id, actor.id, actor)
+          is_admin = member_access.manager?
           current_location = Map.get(EventPresence.list_locations(event_id), actor.id)
 
           socket =
             socket
             |> assign(:event, event)
             |> assign(:is_admin, is_admin)
+            |> assign(:can_manage_members, member_access.full_manager?)
+            |> assign(:member_access_summary, member_access)
             |> assign(:pois, pois)
             |> assign(:geofences, geofences)
             |> assign(:check_ins, check_ins)
@@ -1726,6 +1735,35 @@ defmodule PlatserWeb.MapLive do
     creator_id == actor.id or manager_member?(event_id, actor.id, actor)
   end
 
+  @spec member_access_summary(Ecto.UUID.t(), Ecto.UUID.t(), Platser.Accounts.User.t()) ::
+          member_access_summary()
+  defp member_access_summary(event_id, user_id, actor) do
+    case Platser.Events.list_memberships_for_event(event_id, actor: actor) do
+      {:ok, memberships} ->
+        own_membership = Enum.find(memberships, &(&1.user_id == user_id))
+        own_role = if own_membership, do: own_membership.role, else: :participant
+
+        %{
+          manager?: MapAccess.manager?(own_role),
+          full_manager?: MapAccess.full_manager?(own_role),
+          member_count: length(memberships),
+          full_manager_count: Enum.count(memberships, &MapAccess.full_manager?(&1.role))
+        }
+
+      {:error, _} ->
+        %{
+          manager?: false,
+          full_manager?: false,
+          member_count: 0,
+          full_manager_count: 0
+        }
+    end
+  end
+
+  @spec member_count_label(non_neg_integer()) :: String.t()
+  defp member_count_label(1), do: "1 member"
+  defp member_count_label(count), do: "#{count} members"
+
   @spec manager_member?(Ecto.UUID.t(), Ecto.UUID.t(), Platser.Accounts.User.t()) :: boolean()
   defp manager_member?(event_id, user_id, actor) do
     case Platser.Events.list_memberships_for_event(event_id, actor: actor) do
@@ -2106,6 +2144,19 @@ defmodule PlatserWeb.MapLive do
                 </span>
               <% end %>
             </button>
+            <%= if @can_manage_members do %>
+              <.link
+                id="map-manager-entry-point"
+                navigate={~p"/events/#{@event.id}/dashboard"}
+                class="hidden sm:flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50/95 px-3 py-2 text-amber-800 shadow-lg backdrop-blur-sm transition-colors hover:bg-amber-100 dark:border-amber-900/40 dark:bg-amber-900/30 dark:text-amber-200"
+                title="Manage map members"
+              >
+                <.icon name="hero-shield-check" class="w-4 h-4" />
+                <span class="text-xs font-semibold">
+                  {member_count_label(@member_access_summary.member_count)}
+                </span>
+              </.link>
+            <% end %>
             <.link
               navigate={~p"/events/#{@event.id}/dashboard"}
               class="bg-white/90 backdrop-blur-sm rounded-xl px-3 py-2 shadow-lg border border-gray-200 hover:bg-white transition-colors"
@@ -2337,7 +2388,7 @@ defmodule PlatserWeb.MapLive do
         (@poi_step != :idle or @geofence_step != :idle or @selected_map_object) &&
           "opacity-0 pointer-events-none"
       ]}>
-        <%!-- Set map area (admin only) --%>
+        <%!-- Set map area (manager only) --%>
         <%= if @is_admin do %>
           <button
             id="set-map-area-btn"

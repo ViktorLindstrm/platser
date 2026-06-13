@@ -22,6 +22,7 @@ defmodule PlatserWeb.Events.DashboardLive do
         pois = load_pois(event_id, actor)
         geofences = load_geofences(event_id, actor)
         is_admin = full_manager?(memberships, actor.id)
+        member_stats = member_stats(memberships, pois, geofences)
 
         if connected?(socket) do
           Phoenix.PubSub.subscribe(Platser.PubSub, "event:#{event.id}:settings")
@@ -32,6 +33,7 @@ defmodule PlatserWeb.Events.DashboardLive do
           |> assign(:page_title, event.name)
           |> assign(:event, event)
           |> assign(:is_admin, is_admin)
+          |> assign(:member_stats, member_stats)
           |> assign(:editing, false)
           |> assign(:event_form, nil)
           |> stream(:memberships, memberships)
@@ -271,7 +273,7 @@ defmodule PlatserWeb.Events.DashboardLive do
           :ok ->
             {:noreply,
              socket
-             |> stream_delete(:memberships, membership)
+             |> refresh_membership_stream()
              |> put_flash(:info, "Member removed from event.")}
 
           {:error, %Ash.Error.Forbidden{}} ->
@@ -319,7 +321,7 @@ defmodule PlatserWeb.Events.DashboardLive do
       {:ok, updated_membership} ->
         {:noreply,
          socket
-         |> stream_insert(:memberships, updated_membership)
+         |> refresh_membership_stream(updated_membership)
          |> put_flash(:info, "Member role updated.")}
 
       {:error, %Ash.Error.Forbidden{}} ->
@@ -618,9 +620,41 @@ defmodule PlatserWeb.Events.DashboardLive do
 
         <%!-- Members section --%>
         <section id="members-section" class="space-y-4">
-          <h2 class="text-lg font-semibold text-base-content">
-            Members
-          </h2>
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 class="text-lg font-semibold text-base-content">
+                Members
+              </h2>
+              <p class="mt-1 text-sm text-base-content/50">
+                Review map access, account type, join state, and contribution status.
+              </p>
+            </div>
+            <dl
+              id="member-management-summary"
+              class="grid grid-cols-3 gap-2 rounded-2xl border border-base-200 bg-base-100 p-2 text-center sm:min-w-80"
+            >
+              <div class="rounded-xl bg-base-200/70 px-3 py-2">
+                <dt class="text-[11px] font-semibold uppercase text-base-content/45">Members</dt>
+                <dd class="text-lg font-bold text-base-content">{@member_stats.total}</dd>
+              </div>
+              <div class="rounded-xl bg-amber-50 px-3 py-2 dark:bg-amber-900/20">
+                <dt class="text-[11px] font-semibold uppercase text-amber-700/70 dark:text-amber-300/70">
+                  Managers
+                </dt>
+                <dd class="text-lg font-bold text-amber-700 dark:text-amber-300">
+                  {@member_stats.full_managers}
+                </dd>
+              </div>
+              <div class="rounded-xl bg-emerald-50 px-3 py-2 dark:bg-emerald-900/20">
+                <dt class="text-[11px] font-semibold uppercase text-emerald-700/70 dark:text-emerald-300/70">
+                  Active
+                </dt>
+                <dd class="text-lg font-bold text-emerald-700 dark:text-emerald-300">
+                  {@member_stats.contributors}
+                </dd>
+              </div>
+            </dl>
+          </div>
           <div
             id="memberships-list"
             phx-update="stream"
@@ -629,73 +663,187 @@ defmodule PlatserWeb.Events.DashboardLive do
             <div
               :for={{id, membership} <- @streams.memberships}
               id={id}
-              class="flex items-center gap-3 px-5 py-3 group"
+              class="grid gap-4 px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center"
             >
-              <div class="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                <span class="text-sm font-bold text-primary uppercase">
-                  {String.first(membership.user.display_name)}
-                </span>
-              </div>
-              <div class="flex-1 min-w-0">
-                <p class="text-sm font-medium text-base-content truncate">
-                  {membership.user.display_name}
-                </p>
-                <p class="text-xs text-base-content/40">
-                  Joined {Calendar.strftime(membership.joined_at, "%b %-d, %Y")}
-                </p>
-              </div>
-              <span class={[
-                "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold shrink-0",
-                if(MapAccess.manager_role?(membership.role),
-                  do: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
-                  else: "bg-base-200 text-base-content/60"
-                )
-              ]}>
-                {MapAccess.label(membership.role)}
-              </span>
-              <%= if @is_admin do %>
-                <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <%= if MapAccess.full_manager?(membership.role) do %>
-                    <button
-                      phx-click="update_member_role"
-                      phx-value-id={membership.id}
-                      phx-value-role="participant"
-                      title="Demote to Member"
-                      class="p-1.5 rounded-lg hover:bg-base-200 text-base-content/60 hover:text-base-content transition-colors"
-                      data-confirm="Demote this map manager to member?"
+              <% summary = member_summary(@member_stats, membership) %>
+              <% sole_full_manager? = sole_full_manager?(@member_stats, membership) %>
+              <div class="flex min-w-0 gap-3">
+                <div class="w-11 h-11 rounded-2xl bg-primary/10 flex items-center justify-center shrink-0">
+                  <span class="text-sm font-bold text-primary uppercase">
+                    {member_initial(membership.user.display_name)}
+                  </span>
+                </div>
+                <div class="min-w-0 flex-1 space-y-2">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <p class="text-sm font-semibold text-base-content truncate">
+                      {membership.user.display_name}
+                    </p>
+                    <span
+                      id={"member-account-status-#{membership.id}"}
+                      class={[
+                        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                        if(membership.user.is_guest,
+                          do:
+                            "bg-sky-50 text-sky-700 ring-1 ring-sky-100 dark:bg-sky-900/20 dark:text-sky-300 dark:ring-sky-900/40",
+                          else:
+                            "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300 dark:ring-emerald-900/40"
+                        )
+                      ]}
                     >
-                      <.icon name="hero-arrow-down" class="w-4 h-4" />
-                    </button>
-                  <% else %>
+                      <.icon
+                        name={if membership.user.is_guest, do: "hero-user", else: "hero-shield-check"}
+                        class="w-3 h-3"
+                      />
+                      {if membership.user.is_guest, do: "Guest", else: "Registered"}
+                    </span>
+                    <%= if membership.user_id == @current_user.id do %>
+                      <span
+                        id={"member-current-user-#{membership.id}"}
+                        class="rounded-full bg-base-200 px-2 py-0.5 text-[11px] font-semibold text-base-content/60"
+                      >
+                        You
+                      </span>
+                    <% end %>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span
+                      id={"member-access-level-#{membership.id}"}
+                      class={[
+                        "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold",
+                        role_badge_class(membership.role)
+                      ]}
+                    >
+                      <.icon name={role_icon(membership.role)} class="w-3.5 h-3.5" />
+                      {MapAccess.label(membership.role)}
+                    </span>
+                    <span
+                      id={"member-contribution-status-#{membership.id}"}
+                      class={[
+                        "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold",
+                        contribution_badge_class(summary.total_contributions)
+                      ]}
+                    >
+                      <.icon name="hero-map-pin" class="w-3.5 h-3.5" />
+                      {contribution_label(summary)}
+                    </span>
+                    <span
+                      id={"member-join-state-#{membership.id}"}
+                      class="inline-flex items-center gap-1 rounded-full bg-base-200 px-2.5 py-1 text-xs font-semibold text-base-content/60"
+                    >
+                      <.icon name="hero-calendar-days" class="w-3.5 h-3.5" />
+                      Joined {Calendar.strftime(membership.joined_at, "%b %-d, %Y")}
+                    </span>
+                    <span
+                      id={"member-participation-status-#{membership.id}"}
+                      class={[
+                        "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold",
+                        participation_badge_class(@event)
+                      ]}
+                    >
+                      <.icon name={participation_icon(@event)} class="w-3.5 h-3.5" />
+                      {participation_label(@event, membership)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <%= if @is_admin do %>
+                <div
+                  id={"member-controls-#{membership.id}"}
+                  class="flex flex-wrap items-center gap-2 lg:justify-end"
+                >
+                  <%= if MapAccess.normalize(membership.role) != :full_manager do %>
                     <button
+                      id={"promote-full-manager-#{membership.id}"}
                       phx-click="update_member_role"
                       phx-value-id={membership.id}
                       phx-value-role="full_manager"
-                      title="Promote to Map manager"
-                      class="p-1.5 rounded-lg hover:bg-base-200 text-base-content/60 hover:text-base-content transition-colors"
+                      title={
+                        if membership.user.is_guest,
+                          do: "Guests must register before becoming map managers",
+                          else: "Promote to Map manager"
+                      }
+                      disabled={membership.user.is_guest}
+                      class={[
+                        "inline-flex h-9 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold transition-all",
+                        if(membership.user.is_guest,
+                          do: "cursor-not-allowed bg-base-200 text-base-content/30",
+                          else:
+                            "bg-amber-50 text-amber-700 hover:bg-amber-100 active:scale-95 dark:bg-amber-900/20 dark:text-amber-300"
+                        )
+                      ]}
                     >
-                      <.icon name="hero-arrow-up" class="w-4 h-4" />
+                      <.icon name="hero-arrow-up" class="w-4 h-4" /> Map manager
                     </button>
                   <% end %>
-                  <%= if MapAccess.normalize(membership.role) == :participant do %>
+                  <%= if MapAccess.normalize(membership.role) != :content_manager do %>
                     <button
+                      id={"promote-content-manager-#{membership.id}"}
                       phx-click="update_member_role"
                       phx-value-id={membership.id}
                       phx-value-role="content_manager"
-                      title="Promote to Contributor manager"
-                      class="p-1.5 rounded-lg hover:bg-base-200 text-base-content/60 hover:text-base-content transition-colors"
+                      title={
+                        if membership.user.is_guest,
+                          do: "Guests must register before becoming contributor managers",
+                          else: "Set as Contributor manager"
+                      }
+                      disabled={membership.user.is_guest}
+                      class={[
+                        "inline-flex h-9 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold transition-all",
+                        if(membership.user.is_guest,
+                          do: "cursor-not-allowed bg-base-200 text-base-content/30",
+                          else:
+                            "bg-indigo-50 text-indigo-700 hover:bg-indigo-100 active:scale-95 dark:bg-indigo-900/20 dark:text-indigo-300"
+                        )
+                      ]}
                     >
-                      <.icon name="hero-pencil-square" class="w-4 h-4" />
+                      <.icon name="hero-pencil-square" class="w-4 h-4" /> Contributor
+                    </button>
+                  <% end %>
+                  <%= if MapAccess.normalize(membership.role) != :participant do %>
+                    <button
+                      id={"demote-participant-#{membership.id}"}
+                      phx-click="update_member_role"
+                      phx-value-id={membership.id}
+                      phx-value-role="participant"
+                      title={
+                        if sole_full_manager?,
+                          do: "The event needs at least one map manager",
+                          else: "Set as Member"
+                      }
+                      disabled={sole_full_manager?}
+                      class={[
+                        "inline-flex h-9 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold transition-all",
+                        if(sole_full_manager?,
+                          do: "cursor-not-allowed bg-base-200 text-base-content/30",
+                          else: "bg-base-200 text-base-content/70 hover:bg-base-300 active:scale-95"
+                        )
+                      ]}
+                      data-confirm="Change this member to normal member access?"
+                    >
+                      <.icon name="hero-arrow-down" class="w-4 h-4" /> Member
                     </button>
                   <% end %>
                   <button
+                    id={"remove-member-#{membership.id}"}
                     phx-click="remove_member"
                     phx-value-id={membership.id}
-                    title="Remove Member"
-                    class="p-1.5 rounded-lg hover:bg-red-100 text-base-content/60 hover:text-red-600 transition-colors dark:hover:bg-red-900/20"
+                    title={
+                      if sole_full_manager?,
+                        do: "The event needs at least one map manager",
+                        else: "Remove Member"
+                    }
+                    disabled={sole_full_manager?}
+                    class={[
+                      "inline-flex h-9 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold transition-all",
+                      if(sole_full_manager?,
+                        do: "cursor-not-allowed bg-base-200 text-base-content/30",
+                        else:
+                          "bg-red-50 text-red-600 hover:bg-red-100 active:scale-95 dark:bg-red-900/20 dark:text-red-300"
+                      )
+                    ]}
                     data-confirm="Remove this member from the event? They can rejoin with the invite code."
                   >
-                    <.icon name="hero-x-mark" class="w-4 h-4" />
+                    <.icon name="hero-x-mark" class="w-4 h-4" /> Remove
                   </button>
                 </div>
               <% end %>
@@ -850,6 +998,40 @@ defmodule PlatserWeb.Events.DashboardLive do
     """
   end
 
+  @type member_summary :: %{
+          poi_count: non_neg_integer(),
+          geofence_count: non_neg_integer(),
+          total_contributions: non_neg_integer()
+        }
+
+  @type member_stats :: %{
+          total: non_neg_integer(),
+          full_managers: non_neg_integer(),
+          contributors: non_neg_integer(),
+          summaries: %{optional(Ecto.UUID.t()) => member_summary()}
+        }
+
+  @spec refresh_membership_stream(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp refresh_membership_stream(socket) do
+    refresh_membership_stream(socket, nil)
+  end
+
+  @spec refresh_membership_stream(Phoenix.LiveView.Socket.t(), Membership.t() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  defp refresh_membership_stream(socket, _updated_membership) do
+    actor = socket.assigns.current_user
+    event_id = socket.assigns.event.id
+    memberships = load_memberships(event_id, actor)
+    pois = load_pois(event_id, actor)
+    geofences = load_geofences(event_id, actor)
+    member_stats = member_stats(memberships, pois, geofences)
+
+    socket
+    |> assign(:member_stats, member_stats)
+    |> assign(:is_admin, full_manager?(memberships, actor.id))
+    |> stream(:memberships, memberships, reset: true)
+  end
+
   @spec load_event(Ecto.UUID.t(), Platser.Accounts.User.t()) ::
           {:ok, Event.t()} | {:error, :not_found}
   defp load_event(event_id, actor) do
@@ -883,6 +1065,139 @@ defmodule PlatserWeb.Events.DashboardLive do
       {:error, _} -> []
     end
   end
+
+  @spec member_stats([Membership.t()], [Poi.t()], [Geofence.t()]) :: member_stats()
+  defp member_stats(memberships, pois, geofences) do
+    summaries =
+      Map.new(memberships, fn membership ->
+        poi_count = Enum.count(pois, &(&1.creator_id == membership.user_id))
+        geofence_count = Enum.count(geofences, &(&1.creator_id == membership.user_id))
+
+        {membership.id,
+         %{
+           poi_count: poi_count,
+           geofence_count: geofence_count,
+           total_contributions: poi_count + geofence_count
+         }}
+      end)
+
+    %{
+      total: length(memberships),
+      full_managers: Enum.count(memberships, &MapAccess.full_manager?(&1.role)),
+      contributors:
+        Enum.count(memberships, fn membership ->
+          summary = Map.fetch!(summaries, membership.id)
+          summary.total_contributions > 0 or MapAccess.manager?(membership.role)
+        end),
+      summaries: summaries
+    }
+  end
+
+  @spec member_summary(member_stats(), Membership.t()) :: member_summary()
+  defp member_summary(member_stats, membership) do
+    Map.get(member_stats.summaries, membership.id, %{
+      poi_count: 0,
+      geofence_count: 0,
+      total_contributions: 0
+    })
+  end
+
+  @spec sole_full_manager?(member_stats(), Membership.t()) :: boolean()
+  defp sole_full_manager?(member_stats, membership) do
+    MapAccess.full_manager?(membership.role) and member_stats.full_managers <= 1
+  end
+
+  @spec member_initial(String.t()) :: String.t()
+  defp member_initial(display_name) do
+    display_name
+    |> String.trim()
+    |> String.first()
+    |> case do
+      nil -> "?"
+      initial -> initial
+    end
+  end
+
+  @spec role_icon(MapAccess.compatible_role()) :: String.t()
+  defp role_icon(role) do
+    case MapAccess.normalize(role) do
+      :full_manager -> "hero-shield-check"
+      :content_manager -> "hero-pencil-square"
+      :participant -> "hero-user"
+    end
+  end
+
+  @spec role_badge_class(MapAccess.compatible_role()) :: String.t()
+  defp role_badge_class(role) do
+    case MapAccess.normalize(role) do
+      :full_manager ->
+        "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+
+      :content_manager ->
+        "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300"
+
+      :participant ->
+        "bg-base-200 text-base-content/60"
+    end
+  end
+
+  @spec contribution_label(member_summary()) :: String.t()
+  defp contribution_label(%{total_contributions: 0}), do: "No map items yet"
+
+  defp contribution_label(summary) do
+    "#{summary.total_contributions} item#{plural(summary.total_contributions)} · #{summary.poi_count} POI#{plural(summary.poi_count)} · #{summary.geofence_count} area#{plural(summary.geofence_count)}"
+  end
+
+  @spec contribution_badge_class(non_neg_integer()) :: String.t()
+  defp contribution_badge_class(0), do: "bg-base-200 text-base-content/55"
+
+  defp contribution_badge_class(_count),
+    do: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300"
+
+  @spec participation_label(Event.t(), Membership.t()) :: String.t()
+  defp participation_label(event, membership) do
+    if MapAccess.manager?(membership.role) do
+      "Manager contribution"
+    else
+      disabled_count =
+        [
+          event.allow_participant_comments,
+          event.allow_participant_check_ins,
+          event.allow_participant_live_location
+        ]
+        |> Enum.count(&(&1 == false))
+
+      case disabled_count do
+        0 -> "Contributor"
+        3 -> "Restricted viewer"
+        _ -> "Partly restricted"
+      end
+    end
+  end
+
+  @spec participation_icon(Event.t()) :: String.t()
+  defp participation_icon(event) do
+    if event.allow_participant_comments and event.allow_participant_check_ins and
+         event.allow_participant_live_location do
+      "hero-check-circle"
+    else
+      "hero-eye"
+    end
+  end
+
+  @spec participation_badge_class(Event.t()) :: String.t()
+  defp participation_badge_class(event) do
+    if event.allow_participant_comments and event.allow_participant_check_ins and
+         event.allow_participant_live_location do
+      "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300"
+    else
+      "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+    end
+  end
+
+  @spec plural(non_neg_integer()) :: String.t()
+  defp plural(1), do: ""
+  defp plural(_count), do: "s"
 
   @spec full_manager?([Membership.t()], Ecto.UUID.t()) :: boolean()
   defp full_manager?(memberships, user_id) do

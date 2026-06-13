@@ -104,6 +104,26 @@
 - Site-wide `superuser` remains separate and does not bypass participation
   policies without event membership and map-scoped authorization.
 
+### Task #101 Dashboard Member Management UI Notes
+
+- Status: implemented.
+- The event dashboard is the authoritative map member-management surface.
+  Member rows use LiveView streams and stable DOM IDs for access badges,
+  account status, join state, contribution status, participation status, and
+  each management control.
+- Dashboard copy uses map-scoped vocabulary only: Map manager, Contributor
+  manager, Member, Guest, Registered, and Restricted viewer for participants
+  limited by event participation settings.
+- Full map managers can promote registered members to map manager or contributor
+  manager, demote managers to member, and remove members where the last-map-
+  manager guard allows it. Guest manager promotions render as disabled controls;
+  Ash authorization remains the enforcement boundary.
+- The map view only shows a compact full-map-manager entry point to the
+  dashboard with the member count. Content managers keep map-content powers, but
+  do not get member-management entry UI.
+- Site-wide Admin/superuser status remains separate: a superuser who is not an
+  event member is redirected away from the map and does not see map-manager UI.
+
 1. Capability vocabulary and compatibility helpers.
    - Add a small boundary/domain module for membership levels and capability
      checks with Elixir 1.20 `@type` closed unions and `@spec` on every function.
