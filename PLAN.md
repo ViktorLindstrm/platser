@@ -1,3 +1,166 @@
+# Map Search Improvements Plan
+
+## Task #94 Review and Hardening
+
+- Re-read AGENTS.md, ADR-0032, ADR-0039, ADR-0040, and PLAN.md before the final pass.
+- Confirm current public Nominatim policy constraints:
+  explicit end-user searches only, one request per second for the whole application, identifying
+  User-Agent or Referer, visible attribution, runtime switchability, caching where possible, no
+  autocomplete, and no systematic grid/category/download queries.
+- Review the current implementation against the intended behavior:
+  house-number search uses a conservative structured retry, address labels are normalized,
+  result volume is explicit and capped at forty, locale/country/bounds relevance is request
+  context, successful normalized provider results are cached briefly, and provider limitations
+  are treated separately from app bugs.
+- Run focused search and map LiveView tests before broader checks.
+- Run `mix compile --warnings-as-errors` and `mix precommit` after documentation updates.
+- Use `browser_eval` only if the hardening pass changes LiveView behavior; this pass does not
+  intentionally change UI behavior.
+
+## Task #93 Richer Provider and POI Coverage Assessment
+
+- Public Nominatim remains the near-term geocoding provider for explicit-submit, low-volume map
+  search.
+- Do not use public Nominatim for autocomplete, systematic reverse-query grids, complete
+  postcode/town lists, or complete POI/category downloads.
+- Near-term provider switchability is the existing `PLATSER_GEOCODER_URL` runtime setting for a
+  self-hosted or paid Nominatim-compatible endpoint.
+- Longer-term capabilities should be selected separately:
+  self-hosted/paid Nominatim-compatible service for higher-volume geocoding, dedicated
+  autocomplete-capable search such as Photon/Pelias/Meilisearch-backed extracts for typeahead,
+  and Overpass/imported OSM extracts or a commercial place provider for bounded category/nearby
+  discovery.
+- ADR-0041 records the decision to avoid an unused provider abstraction until a second provider is
+  selected.
+
+## Task #92 Server-side Map Search Caching
+
+- Add a supervised in-process `Platser.Map.Search.Geocoder.Cache` without a new dependency.
+- Cache only successful, normalized `Platser.Map.Search.Result` lists from `search_external/2`.
+  Provider errors, malformed responses, and invalid inputs are not cached.
+- Build cache keys from the normalized external-search request contract:
+  provider identity and URL, response format version, normalized query or coordinate mode,
+  reverse lookup flag, limit, bounds/viewbox, bounded flag, locale, country codes, and category.
+- Keep raw provider payloads out of templates and out of the cache; normalization remains the
+  boundary between Req/Nominatim-compatible payloads and LiveView.
+- Use a short default TTL of sixty seconds with a bounded maximum of 256 entries. Expiry is lazy
+  on cache access and insertion, and the oldest inserted entries are evicted when the bound is
+  exceeded.
+- Cache hits happen before provider requests and therefore before the public Nominatim
+  one-request-per-second limiter. Misses still use the existing limiter. Structured-address retry
+  results are cached as the final normalized response for the complete explicit submit.
+- Privacy posture: keys are SHA-256 digests of bounded request context, values are short-lived
+  normalized public map-search results, and the cache is process-local/non-persistent.
+
+## Task #92 Options Considered
+
+- Cachex or another dependency: rejected because the feature needs only a small TTL map and the
+  project already prefers simplicity over dependency growth.
+- Persistent database cache: rejected because query text and location context should not gain a
+  durable retention surface for this low-volume public-provider optimization.
+- Caching raw provider responses: rejected because ADR-0032 keeps raw provider payloads inside the
+  geocoder boundary, while templates and UI should consume controlled result structs only.
+- Per-provider-request cache: deferred because the external search boundary can cache the complete
+  normalized response, including structured retry behavior, with less leakage and simpler
+  invalidation.
+
+## Task #91 Result Volume Controls
+
+- Keep the first map-search page small at five rendered results for mobile ergonomics.
+- Add an explicit "More results" action that increases the rendered cap by ten per click, up to
+  forty results, matching Nominatim's documented maximum `limit`.
+- Preserve explicit-submit semantics: initial search and More results are user-triggered events;
+  no autocomplete, keypress provider calls, grid reverse lookups, or systematic area downloads.
+- Use one combined ordering across sources: authorized event POIs first, external map results
+  second, deduped by normalized result id, then capped for rendering.
+- Preserve the selected temporary pin when More results reloads the result list. Selecting a new
+  result remains the only way to replace the pin during search exploration.
+- Keep the provider endpoint/runtime settings unchanged. Larger limits remain bounded by local
+  type validation and Nominatim's public maximum.
+
+## Task #91 Options Considered
+
+- Higher default limit: rejected because it makes the mobile panel too tall by default and spends
+  larger provider result budgets before the user asks.
+- Progressive More results: selected because it is explicit, discoverable, and still respects the
+  public-provider policy.
+- Separate internal/external limits: deferred because it complicates result accounting and can
+  render more rows than the selected cap.
+- No UI change: rejected because hidden relevant provider results remain undiscoverable.
+
+## Intent
+
+- Complete task #90 by improving external search relevance with locale, optional country filters,
+  and current viewport/event bounds as Nominatim-compatible request context.
+- Complete task #89 by adding a conservative structured-address retry for house-number searches such as `hövägen 7`.
+- Complete task #88 by fixing Nominatim `jsonv2` normalization while keeping the ADR-0032 result contract.
+- Keep `format=jsonv2`; Nominatim documents it as the same output as JSON except `class` is renamed to `category` and `place_rank` is added.
+- Normalize provider fields in `Platser.Map.Search.Geocoder`, so LiveView templates continue to receive only `Platser.Map.Search.Result` structs and never branch on raw provider payloads.
+
+## Normalization Approach
+
+- Read provider category from `category` first and fall back to legacy `class` for compatible providers and older fixtures.
+- Treat `type` and `addresstype` as classification signals for address-like results when category/class is missing or ambiguous.
+- Classify `house`, `postcode`, `building`, `residential`, and address-like payloads as `:address`.
+- Derive labels from the normalized kind and provider type/category: addresses display `Address`, POI-like provider categories display useful type labels such as `Restaurant` or `Camp site`, and unknowns fall back to `Place`.
+- Build address text from user-useful address parts in stable order, combining house number/name with road where possible and suppressing metadata fields such as `country_code` and `ISO3166-*`.
+
+## Structured Address Retry
+
+- Run free-form Nominatim search first to preserve existing broad place/POI behavior.
+- Retry with structured fields only when the query clearly looks like a street address and the free-form result set is empty or lacks a useful matching address result.
+- Never combine `q` with structured fields; structured retries use fields such as `street`, `city`, `country`, and `postalcode`.
+- Keep a single structured retry per explicit user submit. Public-provider rate limiting still applies per provider request.
+- Merge structured results ahead of weak free-form results and dedupe by normalized result id.
+- Preserve event/map `viewbox` bias for both free-form and structured requests.
+- When structured address retry has bounds, promote those bounds to `bounded=1`; misleading global address matches are worse than an empty local result.
+- If a weak free-form result triggered structured retry and the structured retry is empty, return no external results instead of keeping the weak global matches.
+
+## Non-Goals
+
+- Do not hard-code a Sweden-only country filter.
+- Do not implement autocomplete or provider calls on keypress.
+- Do not infer the current browser viewport for search bias in this slice; that belongs to the locale/viewport-bias task.
+- Do not attempt to parse every international address format.
+
+## Verification Plan
+
+- Add deterministic `Req.Test` cases for JSONv2 house-number payloads and mixed JSON/JSONv2 provider payloads.
+- Add deterministic `Req.Test` cases for empty free-form fallback, weak global-result fallback, useful free-form preservation, and viewbox-preserving structured retries.
+- Add deterministic `Req.Test` coverage that bounded structured retries suppress weak global address results when no local match exists.
+- Add StreamData property coverage for normalized external results: finite WGS84 points, stable provider/source fields, required labels present, and no raw metadata leakage in address text.
+- Add StreamData property coverage for structured retry invariants: accepted address-like input never combines `q` with structured fields and keeps bounded field sizes.
+- Add StreamData-backed LiveView assertions that generated normalized labels render with stable result DOM IDs and expected source/type badges.
+- Run `mix test test/platser/map_search_test.exs`, the relevant MapLive test slice, `mix compile --warnings-as-errors`, and `mix precommit`.
+
+## ADR Review
+
+- ADR-0032 already permits machine-readable Nominatim JSON output and normalized result structs. Because this work keeps `jsonv2` and does not change the result contract, no ADR amendment is planned.
+
+## Task #90 Relevance Policy
+
+- `viewbox` biases Nominatim ranking toward a rectangle; it does not exclude global matches.
+  `bounded=1` turns that viewbox into a hard filter and remains reserved for explicitly
+  constrained semantics, including structured address retries inside known bounds.
+- For normal explicit-submit search, prefer valid current browser viewport bounds submitted with
+  the search form. Fall back to explicit event bounds, then object-derived fallback bounds.
+- Do not infer `countrycodes` from bounds. Nominatim treats country codes as hard filters, so this
+  must come from explicit runtime/event configuration rather than reverse-geocoding or guessing.
+- Locale is provider request context. Use a runtime `:geocoder_accept_language` setting when
+  configured; otherwise omit `accept-language` and let the provider default.
+- Keep Nominatim `layer` and `featureType` out of this slice. They are hard result restrictions
+  and need explicit UI semantics before use.
+- Invalid viewport bounds from the browser are ignored and fall back to safer event/object bounds.
+  Invalid provider options passed to the search boundary return typed errors.
+
+## Task #90 Verification Plan
+
+- Add deterministic `Req.Test` assertions for `accept-language`, `countrycodes`, and viewport
+  precedence over event/fallback bounds.
+- Add StreamData property coverage for valid bounds serializing as `west,north,east,south`, invalid
+  provider bounds being rejected, and LiveView generated viewport submits keeping stable DOM IDs.
+- Run focused search and MapLive tests, `mix compile --warnings-as-errors`, and `mix precommit`.
+
 # P0/P1 Privacy and Security Hardening Plan
 
 ## Intent

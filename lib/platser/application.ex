@@ -20,6 +20,7 @@ defmodule Platser.Application do
         {Task.Supervisor, name: Platser.Privacy.ExportSupervisor},
         retention_worker_child(),
         PlatserWeb.JoinRateLimiter,
+        Platser.Map.Search.Geocoder.Cache,
         Platser.Map.Search.Geocoder.RateLimiter,
         # Start to serve requests, typically the last entry
         PlatserWeb.Endpoint,

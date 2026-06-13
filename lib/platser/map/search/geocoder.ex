@@ -4,6 +4,8 @@ defmodule Platser.Map.Search.Geocoder do
   """
 
   alias Platser.Map.Search
+  alias Platser.Map.Search.AddressQuery
+  alias Platser.Map.Search.Geocoder.Cache
   alias Platser.Map.Search.Geocoder.RateLimiter
   alias Platser.Map.Search.Result
 
@@ -11,12 +13,23 @@ defmodule Platser.Map.Search.Geocoder do
   @type limit :: Search.limit()
   @type bounds :: Result.bounds()
   @type search_opts :: Search.search_opts()
+  @type provider_context :: %{
+          bounds: bounds() | nil,
+          bounded?: boolean(),
+          accept_language: String.t() | nil,
+          countrycodes: [String.t()] | nil
+        }
   @type request_path :: :search | :reverse
   @type provider_kind :: :address | :place | :category
+  @type search_form :: :free_form | :structured
+  @type cache_key :: Cache.key()
 
   @default_limit 5
   @request_timeout_ms 5_000
   @public_geocoder_host "nominatim.openstreetmap.org"
+  @address_types ["address", "building", "house", "postcode", "residential"]
+  @address_addresstypes ["address", "building", "house", "postcode", "residential", "road"]
+  @category_categories ["amenity", "shop", "tourism", "leisure", "natural"]
 
   @category_queries %{
     viewpoint: "viewpoint",
@@ -33,15 +46,30 @@ defmodule Platser.Map.Search.Geocoder do
   @spec search(String.t(), search_opts()) :: {:ok, [Result.t()]} | {:error, Result.error_reason()}
   def search(query_text, opts \\ []) do
     with {:ok, limit} <- fetch_limit(opts),
-         {:ok, bounds} <- fetch_bounds(opts),
+         {:ok, context} <- fetch_provider_context(opts),
          {:ok, query} <- fetch_query(query_text, Keyword.get(opts, :category)) do
-      case Search.parse_coordinates(query) do
-        {:ok, point} ->
-          search_coordinates(point, limit, opts)
+      Cache.fetch(cache_key(query, limit, context, opts), fn ->
+        case Search.parse_coordinates(query) do
+          {:ok, point} ->
+            search_coordinates(point, limit, opts)
 
-        :error ->
-          search_text(query, limit, bounds, Keyword.get(opts, :bounded?, false))
-      end
+          :error ->
+            search_text(query, limit, context)
+        end
+      end)
+    end
+  end
+
+  @doc """
+  Returns the normalized cache key used for an external search request.
+  """
+  @spec cache_key(String.t(), search_opts()) ::
+          {:ok, cache_key()} | {:error, Result.error_reason()}
+  def cache_key(query_text, opts \\ []) do
+    with {:ok, limit} <- fetch_limit(opts),
+         {:ok, context} <- fetch_provider_context(opts),
+         {:ok, query} <- fetch_query(query_text, Keyword.get(opts, :category)) do
+      {:ok, cache_key(query, limit, context, opts)}
     end
   end
 
@@ -76,24 +104,18 @@ defmodule Platser.Map.Search.Geocoder do
     end
   end
 
-  @spec search_text(String.t(), limit(), bounds() | nil, boolean()) ::
+  @spec search_text(String.t(), limit(), provider_context()) ::
           {:ok, [Result.t()]} | {:error, Result.error_reason()}
-  defp search_text(_query, _limit, nil, true), do: {:error, :unsupported}
+  defp search_text(_query, _limit, %{bounds: nil, bounded?: true}), do: {:error, :unsupported}
 
-  defp search_text(query, limit, bounds, bounded?) do
-    params =
-      [
-        q: query,
-        format: "jsonv2",
-        addressdetails: 1,
-        limit: limit
-      ]
-      |> maybe_put_viewbox(bounds)
-      |> maybe_put_bounded(bounded?, bounds)
+  defp search_text(query, limit, context) do
+    params = search_params(query, limit, context)
 
-    case request(:search, params) do
+    case search_provider(params) do
       {:ok, body} when is_list(body) ->
-        normalize_search_results(body)
+        with {:ok, results} <- normalize_search_results(body) do
+          maybe_retry_structured_search(query, results, limit, context)
+        end
 
       {:ok, _body} ->
         {:error, :malformed_response}
@@ -101,6 +123,130 @@ defmodule Platser.Map.Search.Geocoder do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  @spec search_provider(keyword()) :: {:ok, term()} | {:error, Result.error_reason()}
+  defp search_provider(params), do: request(:search, params)
+
+  @spec cache_key(String.t(), limit(), provider_context(), search_opts()) :: cache_key()
+  defp cache_key(query, limit, context, opts) do
+    mode =
+      case Search.parse_coordinates(query) do
+        {:ok, %Geo.Point{coordinates: {lng, lat}}} ->
+          %{type: :coordinate, lat: lat, lng: lng, reverse?: Keyword.get(opts, :reverse?, true)}
+
+        :error ->
+          %{type: :text, query: query, category: Keyword.get(opts, :category)}
+      end
+
+    Cache.key(%{
+      version: 1,
+      provider: :nominatim,
+      provider_url: geocoder_url(),
+      response_format: "jsonv2",
+      limit: limit,
+      mode: mode,
+      bounds: context.bounds,
+      bounded?: context.bounded?,
+      accept_language: context.accept_language,
+      countrycodes: context.countrycodes
+    })
+  end
+
+  @spec search_params(String.t(), limit(), provider_context()) :: keyword()
+  defp search_params(query, limit, context) do
+    [
+      q: query,
+      format: "jsonv2",
+      addressdetails: 1,
+      limit: limit
+    ]
+    |> maybe_put_context(context)
+  end
+
+  @spec structured_search_params(AddressQuery.components(), limit(), provider_context()) ::
+          keyword()
+  defp structured_search_params(components, limit, context) do
+    components
+    |> Map.to_list()
+    |> Keyword.merge(format: "jsonv2", addressdetails: 1, limit: limit)
+    |> maybe_put_context(context)
+  end
+
+  @spec maybe_retry_structured_search(
+          String.t(),
+          [Result.t()],
+          limit(),
+          provider_context()
+        ) ::
+          {:ok, [Result.t()]} | {:error, Result.error_reason()}
+  defp maybe_retry_structured_search(query, results, limit, context) do
+    with true <- structured_retry_needed?(query, results),
+         {:ok, components} <- AddressQuery.parse(query) do
+      params =
+        structured_search_params(components, limit, structured_retry_context(context))
+
+      case search_provider(params) do
+        {:ok, body} when is_list(body) ->
+          with {:ok, structured_results} <- normalize_search_results(body) do
+            {:ok, structured_retry_results(results, structured_results)}
+          end
+
+        {:ok, _body} ->
+          {:error, :malformed_response}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      _fallback_not_needed_or_unsupported -> {:ok, results}
+    end
+  end
+
+  @spec structured_retry_needed?(String.t(), [Result.t()]) :: boolean()
+  defp structured_retry_needed?(query, results) do
+    match?({:ok, _components}, AddressQuery.parse(query)) and
+      (results == [] or not Enum.any?(results, &useful_address_result?(query, &1)))
+  end
+
+  @spec structured_bounded?(boolean(), bounds() | nil) :: boolean()
+  defp structured_bounded?(true, _bounds), do: true
+  defp structured_bounded?(false, nil), do: false
+  defp structured_bounded?(false, %{}), do: true
+
+  @spec structured_retry_context(provider_context()) :: provider_context()
+  defp structured_retry_context(%{bounds: bounds, bounded?: bounded?} = context) do
+    %{context | bounded?: structured_bounded?(bounded?, bounds)}
+  end
+
+  @spec useful_address_result?(String.t(), Result.t()) :: boolean()
+  defp useful_address_result?(query, %Result{} = result) do
+    query_terms = query_terms(query)
+    haystack = String.downcase(Enum.join([result.title, result.subtitle, result.address], " "))
+
+    result.kind == :address and Enum.all?(query_terms, &String.contains?(haystack, &1))
+  end
+
+  @spec query_terms(String.t()) :: [String.t()]
+  defp query_terms(query) do
+    query
+    |> String.downcase()
+    |> String.split([",", " "], trim: true)
+    |> Enum.filter(&(String.length(&1) >= 2))
+    |> Enum.uniq()
+  end
+
+  @spec structured_retry_results([Result.t()], [Result.t()]) :: [Result.t()]
+  defp structured_retry_results(_weak_results, []), do: []
+
+  defp structured_retry_results(results, structured_results),
+    do: merge_results(results, structured_results)
+
+  @spec merge_results([Result.t()], [Result.t()]) :: [Result.t()]
+  defp merge_results(results, structured_results) do
+    structured_results
+    |> Kernel.++(results)
+    |> Enum.uniq_by(& &1.id)
   end
 
   @spec request(request_path(), keyword()) :: {:ok, term()} | {:error, Result.error_reason()}
@@ -263,8 +409,71 @@ defmodule Platser.Map.Search.Geocoder do
 
   @spec title_from_payload(map()) :: String.t() | nil
   defp title_from_payload(payload) do
-    string_value(payload, "name") || first_display_name_part(payload) ||
-      string_value(payload, "display_name")
+    if address_like_payload?(payload) do
+      address_title_from_payload(payload) || first_display_name_part(payload) ||
+        string_value(payload, "name") || string_value(payload, "display_name")
+    else
+      string_value(payload, "name") || first_display_name_part(payload) ||
+        string_value(payload, "display_name")
+    end
+  end
+
+  @spec address_title_from_payload(map()) :: String.t() | nil
+  defp address_title_from_payload(%{"address" => address}) when is_map(address) do
+    street_line =
+      [
+        string_value(address, "road") || string_value(address, "pedestrian") ||
+          string_value(address, "footway") || string_value(address, "cycleway") ||
+          string_value(address, "path"),
+        string_value(address, "house_number") || string_value(address, "house_name")
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" ")
+      |> blank_to_nil()
+
+    street_line || address_area_title(address)
+  end
+
+  defp address_title_from_payload(payload) do
+    payload
+    |> string_value("display_name")
+    |> address_title_from_display_name()
+  end
+
+  @spec address_area_title(map()) :: String.t() | nil
+  defp address_area_title(address) do
+    address
+    |> ordered_address_parts()
+    |> Enum.take(2)
+    |> Enum.join(", ")
+    |> blank_to_nil()
+  end
+
+  @spec address_title_from_display_name(String.t() | nil) :: String.t() | nil
+  defp address_title_from_display_name(nil), do: nil
+
+  defp address_title_from_display_name(display_name) do
+    parts =
+      display_name
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    case parts do
+      [number, street | _rest] ->
+        if numeric_label?(number), do: "#{street} #{number}", else: number
+
+      [first | _rest] ->
+        first
+
+      [] ->
+        nil
+    end
+  end
+
+  @spec numeric_label?(String.t()) :: boolean()
+  defp numeric_label?(value) do
+    Regex.match?(~r/\A\d+[[:alnum:]\/-]*\z/u, value)
   end
 
   @spec first_display_name_part(map()) :: String.t() | nil
@@ -294,9 +503,14 @@ defmodule Platser.Map.Search.Geocoder do
   @spec address_from_payload(map()) :: String.t() | nil
   defp address_from_payload(%{"address" => address}) when is_map(address) do
     address
-    |> Enum.filter(fn {_key, value} -> is_binary(value) and String.trim(value) != "" end)
-    |> Enum.sort_by(fn {key, _value} -> address_sort_key(key) end)
-    |> Enum.map(fn {_key, value} -> value end)
+    |> Enum.reduce(%{}, fn {key, value}, parts ->
+      if useful_address_key?(key) and is_binary(value) and String.trim(value) != "" do
+        Map.put(parts, key, String.trim(value))
+      else
+        parts
+      end
+    end)
+    |> ordered_address_parts()
     |> Enum.uniq()
     |> Enum.join(", ")
     |> blank_to_nil()
@@ -304,9 +518,42 @@ defmodule Platser.Map.Search.Geocoder do
 
   defp address_from_payload(payload), do: string_value(payload, "display_name")
 
+  @spec useful_address_key?(term()) :: boolean()
+  defp useful_address_key?(key) when is_binary(key) do
+    not (key == "country_code" or String.starts_with?(key, "ISO3166-"))
+  end
+
+  defp useful_address_key?(_key), do: false
+
+  @spec ordered_address_parts(%{optional(String.t()) => String.t()}) :: [String.t()]
+  defp ordered_address_parts(address) do
+    street_line =
+      [
+        Map.get(address, "road"),
+        Map.get(address, "house_number") || Map.get(address, "house_name")
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" ")
+      |> blank_to_nil()
+
+    address
+    |> Enum.reject(fn {key, _value} -> key in ["road", "house_number", "house_name"] end)
+    |> Enum.sort_by(fn {key, _value} -> address_sort_key(key) end)
+    |> Enum.map(fn {_key, value} -> value end)
+    |> prepend_if_present(street_line)
+  end
+
+  @spec prepend_if_present([String.t()], String.t() | nil) :: [String.t()]
+  defp prepend_if_present(values, nil), do: values
+  defp prepend_if_present(values, value), do: [value | values]
+
   @spec address_sort_key(String.t()) :: non_neg_integer()
   defp address_sort_key("house_number"), do: 0
+  defp address_sort_key("house_name"), do: 0
   defp address_sort_key("road"), do: 1
+  defp address_sort_key("square"), do: 1
+  defp address_sort_key("place"), do: 1
+  defp address_sort_key("amenity"), do: 1
   defp address_sort_key("neighbourhood"), do: 2
   defp address_sort_key("suburb"), do: 3
   defp address_sort_key("city"), do: 4
@@ -315,21 +562,31 @@ defmodule Platser.Map.Search.Geocoder do
   defp address_sort_key("municipality"), do: 5
   defp address_sort_key("county"), do: 6
   defp address_sort_key("state"), do: 7
-  defp address_sort_key("country"), do: 8
+  defp address_sort_key("postcode"), do: 8
+  defp address_sort_key("country"), do: 9
   defp address_sort_key(_key), do: 9
 
   @spec kind_from_payload(map()) :: provider_kind()
   defp kind_from_payload(payload) do
-    class = string_value(payload, "class")
-    type = string_value(payload, "type")
+    category = provider_category(payload)
+    type = provider_type(payload)
 
     cond do
-      class == "place" and type in ["house", "postcode"] -> :address
-      class == "building" -> :address
-      class == "amenity" -> :category
-      class in ["shop", "tourism", "leisure", "natural"] -> :category
+      address_like_payload?(payload) -> :address
+      category in @category_categories -> :category
+      category == nil and type not in [nil | @address_types] -> :category
       true -> :place
     end
+  end
+
+  @spec address_like_payload?(map()) :: boolean()
+  defp address_like_payload?(payload) do
+    category = provider_category(payload)
+    type = provider_type(payload)
+    addresstype = provider_addresstype(payload)
+
+    type in @address_types or addresstype in @address_addresstypes or category == "building" or
+      (category == "place" and type in ["house", "postcode"])
   end
 
   @spec kind_label(provider_kind(), String.t() | nil) :: String.t()
@@ -341,8 +598,19 @@ defmodule Platser.Map.Search.Geocoder do
 
   @spec category_from_payload(map()) :: String.t() | nil
   defp category_from_payload(payload) do
-    string_value(payload, "type") || string_value(payload, "class")
+    provider_type(payload) || provider_category(payload) || provider_addresstype(payload)
   end
+
+  @spec provider_category(map()) :: String.t() | nil
+  defp provider_category(payload) do
+    string_value(payload, "category") || string_value(payload, "class")
+  end
+
+  @spec provider_type(map()) :: String.t() | nil
+  defp provider_type(payload), do: string_value(payload, "type")
+
+  @spec provider_addresstype(map()) :: String.t() | nil
+  defp provider_addresstype(payload), do: string_value(payload, "addresstype")
 
   @spec result_id(map()) :: String.t()
   defp result_id(payload) do
@@ -374,6 +642,15 @@ defmodule Platser.Map.Search.Geocoder do
     "#{Float.round(lat, 6)}, #{Float.round(lng, 6)}"
   end
 
+  @spec maybe_put_context(keyword(), provider_context()) :: keyword()
+  defp maybe_put_context(params, context) do
+    params
+    |> maybe_put_viewbox(context.bounds)
+    |> maybe_put_bounded(context.bounded?, context.bounds)
+    |> maybe_put_accept_language(context.accept_language)
+    |> maybe_put_countrycodes(context.countrycodes)
+  end
+
   @spec maybe_put_viewbox(keyword(), bounds() | nil) :: keyword()
   defp maybe_put_viewbox(params, nil), do: params
 
@@ -384,6 +661,20 @@ defmodule Platser.Map.Search.Geocoder do
   @spec maybe_put_bounded(keyword(), boolean(), bounds() | nil) :: keyword()
   defp maybe_put_bounded(params, true, %{}), do: Keyword.put(params, :bounded, 1)
   defp maybe_put_bounded(params, _bounded?, _bounds), do: params
+
+  @spec maybe_put_accept_language(keyword(), String.t() | nil) :: keyword()
+  defp maybe_put_accept_language(params, nil), do: params
+
+  defp maybe_put_accept_language(params, accept_language) do
+    Keyword.put(params, :"accept-language", accept_language)
+  end
+
+  @spec maybe_put_countrycodes(keyword(), [String.t()] | nil) :: keyword()
+  defp maybe_put_countrycodes(params, nil), do: params
+
+  defp maybe_put_countrycodes(params, countrycodes) do
+    Keyword.put(params, :countrycodes, Enum.join(countrycodes, ","))
+  end
 
   @spec fetch_query(String.t(), poi_category() | nil) ::
           {:ok, String.t()} | {:error, Result.error_reason()}
@@ -416,10 +707,27 @@ defmodule Platser.Map.Search.Geocoder do
   defp fetch_limit(opts) do
     limit = Keyword.get(opts, :limit, @default_limit)
 
-    if is_integer(limit) and limit in 1..50 do
+    if is_integer(limit) and limit in 1..40 do
       {:ok, limit}
     else
       {:error, :invalid_limit}
+    end
+  end
+
+  @spec fetch_provider_context(search_opts()) ::
+          {:ok, provider_context()}
+          | {:error, :invalid_bounds | :invalid_accept_language | :invalid_countrycodes}
+  defp fetch_provider_context(opts) do
+    with {:ok, bounds} <- fetch_bounds(opts),
+         {:ok, accept_language} <- fetch_accept_language(opts),
+         {:ok, countrycodes} <- fetch_countrycodes(opts) do
+      {:ok,
+       %{
+         bounds: bounds,
+         bounded?: Keyword.get(opts, :bounded?, false),
+         accept_language: accept_language,
+         countrycodes: countrycodes
+       }}
     end
   end
 
@@ -436,6 +744,86 @@ defmodule Platser.Map.Search.Geocoder do
         {:error, :invalid_bounds}
     end
   end
+
+  @spec fetch_accept_language(search_opts()) ::
+          {:ok, String.t() | nil} | {:error, :invalid_accept_language}
+  defp fetch_accept_language(opts) do
+    case Keyword.get(opts, :accept_language) do
+      nil ->
+        {:ok, nil}
+
+      accept_language when is_binary(accept_language) ->
+        accept_language
+        |> String.trim()
+        |> validate_accept_language()
+
+      _accept_language ->
+        {:error, :invalid_accept_language}
+    end
+  end
+
+  @spec validate_accept_language(String.t()) ::
+          {:ok, String.t() | nil} | {:error, :invalid_accept_language}
+  defp validate_accept_language(""), do: {:ok, nil}
+
+  defp validate_accept_language(accept_language) do
+    if String.length(accept_language) <= 128 and
+         Regex.match?(~r/\A[A-Za-z0-9*,;=._ -]+\z/, accept_language) do
+      {:ok, accept_language}
+    else
+      {:error, :invalid_accept_language}
+    end
+  end
+
+  @spec fetch_countrycodes(search_opts()) ::
+          {:ok, [String.t()] | nil} | {:error, :invalid_countrycodes}
+  defp fetch_countrycodes(opts) do
+    case Keyword.get(opts, :countrycodes) do
+      nil ->
+        {:ok, nil}
+
+      countrycodes when is_list(countrycodes) ->
+        countrycodes
+        |> Enum.map(&normalize_countrycode/1)
+        |> validate_countrycodes()
+
+      _countrycodes ->
+        {:error, :invalid_countrycodes}
+    end
+  end
+
+  @spec normalize_countrycode(term()) :: String.t() | :invalid
+  defp normalize_countrycode(countrycode) when is_binary(countrycode) do
+    countrycode
+    |> String.trim()
+    |> String.downcase()
+  end
+
+  defp normalize_countrycode(_countrycode), do: :invalid
+
+  @spec validate_countrycodes([String.t() | :invalid]) ::
+          {:ok, [String.t()] | nil} | {:error, :invalid_countrycodes}
+  defp validate_countrycodes(countrycodes) do
+    unique_countrycodes = Enum.uniq(countrycodes)
+
+    cond do
+      unique_countrycodes == [] ->
+        {:ok, nil}
+
+      Enum.any?(unique_countrycodes, &(&1 == :invalid or not valid_countrycode?(&1))) ->
+        {:error, :invalid_countrycodes}
+
+      true ->
+        {:ok, unique_countrycodes}
+    end
+  end
+
+  @spec valid_countrycode?(String.t()) :: boolean()
+  defp valid_countrycode?(<<a, b>>) do
+    a in ?a..?z and b in ?a..?z
+  end
+
+  defp valid_countrycode?(_countrycode), do: false
 
   @spec validate_bounds(term(), term(), term(), term()) ::
           {:ok, bounds()} | {:error, :invalid_bounds}
