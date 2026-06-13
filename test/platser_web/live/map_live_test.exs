@@ -6,9 +6,11 @@ defmodule PlatserWeb.MapLiveTest do
 
   alias Platser.Activity
   alias Platser.Map, as: PlatserMap
+  alias Platser.Map.Search.Geocoder.Cache
   alias Platser.Media
 
   setup do
+    Cache.clear()
     Req.Test.verify_on_exit!(Platser.Map.Search.Geocoder)
     :ok
   end
@@ -176,6 +178,10 @@ defmodule PlatserWeb.MapLiveTest do
       assert has_element?(view, "#map-search-input")
       assert has_element?(view, "#map-search-submit")
       assert has_element?(view, "#map-search-collapse-toggle")
+      assert has_element?(view, "#map-search-viewport-west")
+      assert has_element?(view, "#map-search-viewport-south")
+      assert has_element?(view, "#map-search-viewport-east")
+      assert has_element?(view, "#map-search-viewport-north")
       refute has_element?(view, "#map-search-results")
     end
 
@@ -215,6 +221,163 @@ defmodule PlatserWeb.MapLiveTest do
       assert has_element?(view, "#map-search-results")
       assert has_element?(view, "#map-search-result-internal-poi-#{poi.id}", "Event POI")
       assert has_element?(view, "#map-search-result-external-nominatim-321", "Map")
+    end
+
+    test "address search result heading shows street and number, not only house number",
+         %{conn: conn} do
+      user = create_user("search_address_heading")
+      event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 166_162_271,
+            "lat" => "59.334",
+            "lon" => "18.063",
+            "name" => "2",
+            "display_name" => "2, Hövägen, Teststad, Sweden",
+            "category" => "place",
+            "type" => "house",
+            "addresstype" => "house",
+            "address" => %{
+              "house_number" => "2",
+              "road" => "Hövägen",
+              "city" => "Teststad",
+              "country" => "Sweden"
+            }
+          }
+        ])
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "hövägen 2"}
+      })
+
+      assert has_element?(
+               view,
+               "#map-search-result-external-nominatim-166162271 h2",
+               "Hövägen 2"
+             )
+    end
+
+    property "external search result badges render normalized labels with stable DOM IDs" do
+      check all(
+              {place_id, payload, expected_label} <- map_search_provider_payload_gen(),
+              max_runs: 5
+            ) do
+        Cache.clear()
+
+        user = create_user("search_label_prop")
+        event = create_event(user)
+
+        Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+          Req.Test.json(conn, [payload])
+        end)
+
+        conn = sign_in_conn(build_conn(), user)
+        {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+        render_submit(element(view, "#map-search-form"), %{
+          "search" => %{"query" => "generated"}
+        })
+
+        result_id = "#map-search-result-external-nominatim-#{place_id}"
+
+        assert has_element?(view, "#map-search-results")
+        assert has_element?(view, result_id, "Map")
+        assert has_element?(view, result_id, expected_label)
+      end
+    end
+
+    property "search submit uses generated viewport bounds as provider viewbox" do
+      check all(
+              bounds <- map_search_viewport_bounds_gen(),
+              place_id <- StreamData.integer(20_000..29_999),
+              max_runs: 5
+            ) do
+        Cache.clear()
+
+        user = create_user("search_viewport_prop")
+        event = create_event(user)
+
+        create_poi(user, event, %{
+          name: "Fallback POI",
+          location: %Geo.Point{coordinates: {174.7633, -36.8485}, srid: 4326}
+        })
+
+        Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+          conn = Plug.Conn.fetch_query_params(conn)
+
+          assert conn.query_params["viewbox"] ==
+                   "#{bounds.west},#{bounds.north},#{bounds.east},#{bounds.south}"
+
+          Req.Test.json(conn, [
+            %{
+              "place_id" => place_id,
+              "lat" => "#{(bounds.south + bounds.north) / 2}",
+              "lon" => "#{(bounds.west + bounds.east) / 2}",
+              "name" => "Viewport Result",
+              "category" => "place",
+              "type" => "neighbourhood"
+            }
+          ])
+        end)
+
+        conn = sign_in_conn(build_conn(), user)
+        {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+        render_submit(element(view, "#map-search-form"), %{
+          "search" => %{
+            "query" => "viewport result",
+            "viewport_west" => "#{bounds.west}",
+            "viewport_south" => "#{bounds.south}",
+            "viewport_east" => "#{bounds.east}",
+            "viewport_north" => "#{bounds.north}"
+          }
+        })
+
+        assert has_element?(view, "#map-search-form")
+        assert has_element?(view, "#map-search-input")
+        assert has_element?(view, "#map-search-result-external-nominatim-#{place_id}")
+      end
+    end
+
+    test "invalid submitted viewport bounds fall back to event object bounds", %{conn: conn} do
+      user = create_user("search_viewport_invalid")
+      event = create_event(user)
+
+      create_poi(user, event, %{
+        name: "Fallback POI",
+        location: %Geo.Point{coordinates: {18.0, 59.0}, srid: 4326}
+      })
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        assert conn.query_params["viewbox"] == "18.0,59.0,18.0,59.0"
+
+        Req.Test.json(conn, [])
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{
+          "query" => "fallback result",
+          "viewport_west" => "190",
+          "viewport_south" => "59",
+          "viewport_east" => "18",
+          "viewport_north" => "60"
+        }
+      })
+
+      assert has_element?(view, "#map-search-form")
+      assert has_element?(view, "#map-search-input")
+      assert has_element?(view, "#map-search-no-results")
     end
 
     test "clearing the search input clears visible results but keeps the temporary pin selected",
@@ -280,6 +443,91 @@ defmodule PlatserWeb.MapLiveTest do
 
       assert has_element?(view, "#map-search-results")
       assert has_element?(view, "#map-search-no-results")
+    end
+
+    test "search caps rendered rows and can explicitly load more results", %{conn: conn} do
+      user = create_user("search_more")
+      event = create_event(user)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, 2, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+        limit = String.to_integer(conn.query_params["limit"])
+
+        Req.Test.json(conn, map_search_payloads(limit))
+      end)
+
+      conn = sign_in_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      render_submit(element(view, "#map-search-form"), %{
+        "search" => %{"query" => "generated more"}
+      })
+
+      assert has_element?(view, "#map-search-results")
+      assert has_element?(view, "#map-search-result-external-nominatim-9001")
+      assert has_element?(view, "#map-search-result-external-nominatim-9005")
+      refute has_element?(view, "#map-search-result-external-nominatim-9006")
+      assert has_element?(view, "#map-search-more-results")
+
+      render_click(element(view, "#map-search-result-external-nominatim-9003"))
+      assert_push_event(view, "show_temporary_search_pin", %{id: "external:nominatim:9003"})
+
+      render_click(element(view, "#map-search-more-results"))
+
+      assert has_element?(view, "#map-search-result-external-nominatim-9001")
+      assert has_element?(view, "#map-search-result-external-nominatim-9015")
+      refute has_element?(view, "#map-search-result-external-nominatim-9016")
+      assert has_element?(view, "#map-search-more-results")
+
+      render_hook(view, "create_poi_from_search_result", %{})
+
+      assert_push_event(view, "clear_temporary_search_pin", %{})
+      assert has_element?(view, ~s(#poi-name[value="Generated Result 3"]))
+    end
+
+    property "generated search result lists render stable capped rows and empty states" do
+      check all(result_count <- StreamData.integer(0..12), max_runs: 5) do
+        Cache.clear()
+
+        user = create_user("search_volume_prop")
+        event = create_event(user)
+
+        Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+          Req.Test.json(conn, map_search_payloads(result_count))
+        end)
+
+        conn = sign_in_conn(build_conn(), user)
+        {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+        render_submit(element(view, "#map-search-form"), %{
+          "search" => %{"query" => "generated volume"}
+        })
+
+        assert has_element?(view, "#map-search-results")
+
+        if result_count == 0 do
+          assert has_element?(view, "#map-search-no-results")
+          refute has_element?(view, "#map-search-more-results")
+        else
+          visible_count = min(result_count, 5)
+
+          assert has_element?(
+                   view,
+                   "#map-search-result-external-nominatim-#{9000 + visible_count}"
+                 )
+
+          refute has_element?(
+                   view,
+                   "#map-search-result-external-nominatim-#{9000 + visible_count + 1}"
+                 )
+
+          if result_count >= 5 do
+            assert has_element?(view, "#map-search-more-results")
+          else
+            refute has_element?(view, "#map-search-more-results")
+          end
+        end
+      end
     end
 
     test "search failures show an error flash", %{conn: conn} do
@@ -1383,6 +1631,117 @@ defmodule PlatserWeb.MapLiveTest do
         &(&1 <> ".pdf")
       )
     ])
+  end
+
+  defp map_search_provider_payload_gen do
+    StreamData.bind(
+      StreamData.tuple({
+        StreamData.integer(10_000..99_999),
+        StreamData.member_of([
+          {:house, "Address"},
+          {:restaurant, "Restaurant"},
+          {:camp, "Camp site"},
+          {:postcode, "Address"}
+        ])
+      }),
+      fn {place_id, {shape, expected_label}} ->
+        StreamData.constant(
+          {place_id, map_search_provider_payload(place_id, shape), expected_label}
+        )
+      end
+    )
+  end
+
+  defp map_search_viewport_bounds_gen do
+    StreamData.bind(
+      StreamData.tuple({
+        StreamData.float(min: -179.0, max: 179.0),
+        StreamData.float(min: -89.0, max: 89.0),
+        StreamData.float(min: 0.01, max: 1.0),
+        StreamData.float(min: 0.01, max: 1.0)
+      }),
+      fn {west, south, lng_delta, lat_delta} ->
+        StreamData.constant(%{
+          west: west,
+          south: south,
+          east: min(west + lng_delta, 180.0),
+          north: min(south + lat_delta, 90.0)
+        })
+      end
+    )
+  end
+
+  @spec map_search_payloads(non_neg_integer()) :: [map()]
+  defp map_search_payloads(count) do
+    1..count//1
+    |> Enum.map(fn index ->
+      %{
+        "place_id" => 9000 + index,
+        "lat" => "#{59.0 + index / 1000}",
+        "lon" => "#{18.0 + index / 1000}",
+        "name" => "Generated Result #{index}",
+        "display_name" => "Generated Result #{index}, Sweden",
+        "category" => "place",
+        "type" => "locality"
+      }
+    end)
+  end
+
+  defp map_search_provider_payload(place_id, :house) do
+    %{
+      "place_id" => place_id,
+      "lat" => "59.334",
+      "lon" => "18.063",
+      "display_name" => "Generated Road 7, Stockholm, Sweden",
+      "category" => "place",
+      "type" => "house",
+      "addresstype" => "house",
+      "address" => %{
+        "house_number" => "7",
+        "road" => "Generated Road",
+        "city" => "Stockholm",
+        "country" => "Sweden",
+        "country_code" => "se"
+      }
+    }
+  end
+
+  defp map_search_provider_payload(place_id, :restaurant) do
+    %{
+      "place_id" => place_id,
+      "lat" => "59.335",
+      "lon" => "18.064",
+      "name" => "Generated Restaurant",
+      "category" => "amenity",
+      "type" => "restaurant"
+    }
+  end
+
+  defp map_search_provider_payload(place_id, :camp) do
+    %{
+      "place_id" => place_id,
+      "lat" => "59.336",
+      "lon" => "18.065",
+      "name" => "Generated Camp",
+      "class" => "tourism",
+      "type" => "camp_site"
+    }
+  end
+
+  defp map_search_provider_payload(place_id, :postcode) do
+    %{
+      "place_id" => place_id,
+      "lat" => "59.337",
+      "lon" => "18.066",
+      "display_name" => "123 45, Stockholm, Sweden",
+      "type" => "postcode",
+      "addresstype" => "postcode",
+      "address" => %{
+        "postcode" => "123 45",
+        "city" => "Stockholm",
+        "country" => "Sweden"
+      }
+    }
   end
 
   defp upload_jpeg_with_metadata do

@@ -5,9 +5,12 @@ defmodule Platser.MapSearchTest do
   alias Platser.Events
   alias Platser.Map, as: PlatserMap
   alias Platser.Map.Search
+  alias Platser.Map.Search.Geocoder
+  alias Platser.Map.Search.Geocoder.Cache
   alias Platser.Map.Search.Result
 
   setup do
+    Cache.clear()
     Req.Test.verify_on_exit!(Platser.Map.Search.Geocoder)
     :ok
   end
@@ -245,6 +248,435 @@ defmodule Platser.MapSearchTest do
       assert result.provider == :nominatim
     end
 
+    test "passes locale and explicit country filters to Nominatim search" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        assert conn.query_params["accept-language"] == "sv-SE,sv;q=0.9,en;q=0.5"
+        assert conn.query_params["countrycodes"] == "se,no"
+
+        Req.Test.json(conn, [])
+      end)
+
+      assert {:ok, []} =
+               Search.search_external("national park",
+                 accept_language: "sv-SE,sv;q=0.9,en;q=0.5",
+                 countrycodes: ["SE", "no", "se"]
+               )
+    end
+
+    property "generated valid provider limits are accepted and sent to Nominatim" do
+      check all(limit <- StreamData.integer(1..40), max_runs: 20) do
+        Cache.clear()
+
+        Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+          conn = Plug.Conn.fetch_query_params(conn)
+
+          assert conn.query_params["limit"] == Integer.to_string(limit)
+
+          Req.Test.json(conn, [])
+        end)
+
+        assert {:ok, []} = Search.search_external("generated limit", limit: limit)
+      end
+    end
+
+    property "generated invalid provider limits are rejected before provider requests" do
+      check all(limit <- invalid_search_limit_gen(), max_runs: 20) do
+        assert {:error, :invalid_limit} = Search.search_external("generated limit", limit: limit)
+      end
+    end
+
+    property "valid bounds serialize to Nominatim viewbox west,north,east,south" do
+      check all(bounds <- valid_bounds_gen(), max_runs: 20) do
+        Cache.clear()
+
+        Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+          conn = Plug.Conn.fetch_query_params(conn)
+
+          assert conn.query_params["viewbox"] ==
+                   "#{bounds.west},#{bounds.north},#{bounds.east},#{bounds.south}"
+
+          Req.Test.json(conn, [])
+        end)
+
+        assert {:ok, []} = Search.search_external("generated park", bounds: bounds)
+      end
+    end
+
+    test "normalizes JSONv2 house-number payloads as address results" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        assert conn.query_params["format"] == "jsonv2"
+
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 456,
+            "lat" => "59.334",
+            "lon" => "18.063",
+            "name" => "12",
+            "display_name" => "Drottninggatan 12, Stockholm, 111 51, Sweden",
+            "category" => "place",
+            "type" => "house",
+            "addresstype" => "house",
+            "address" => %{
+              "house_number" => "12",
+              "road" => "Drottninggatan",
+              "city" => "Stockholm",
+              "postcode" => "111 51",
+              "country" => "Sweden",
+              "country_code" => "se",
+              "ISO3166-2-lvl4" => "SE-AB"
+            }
+          }
+        ])
+      end)
+
+      assert {:ok, [result]} = Search.search_external("drottninggatan 12")
+
+      assert result.kind == :address
+      assert result.kind_label == "Address"
+      assert result.title == "Drottninggatan 12"
+      assert result.category == "house"
+      assert result.address == "Drottninggatan 12, Stockholm, 111 51, Sweden"
+      refute String.contains?(result.address, "country_code")
+      refute String.contains?(result.address, "ISO3166")
+      refute String.contains?(result.address, "se")
+    end
+
+    test "uses the street address as the title when provider name is only a house number" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 457,
+            "lat" => "59.334",
+            "lon" => "18.063",
+            "name" => "2",
+            "display_name" => "2, Hövägen, Teststad, Sweden",
+            "category" => "place",
+            "type" => "house",
+            "addresstype" => "house",
+            "address" => %{
+              "house_number" => "2",
+              "road" => "Hövägen",
+              "city" => "Teststad",
+              "country" => "Sweden"
+            }
+          }
+        ])
+      end)
+
+      assert {:ok, [result]} = Search.search_external("hövägen 2")
+
+      assert result.kind == :address
+      assert result.title == "Hövägen 2"
+      assert result.address == "Hövägen 2, Teststad, Sweden"
+    end
+
+    test "uses display name street context for address results without structured address parts" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 458,
+            "lat" => "59.334",
+            "lon" => "18.063",
+            "name" => "2",
+            "display_name" => "2, Hövägen, Teststad, Sweden",
+            "category" => "place",
+            "type" => "house",
+            "addresstype" => "house"
+          }
+        ])
+      end)
+
+      assert {:ok, [result]} = Search.search_external("hövägen 2")
+
+      assert result.kind == :address
+      assert result.title == "Hövägen 2"
+      assert result.address == "2, Hövägen, Teststad, Sweden"
+    end
+
+    test "normalizes mixed JSON and JSONv2 provider classification fields" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 501,
+            "lat" => "59.33",
+            "lon" => "18.07",
+            "name" => "Lunch Place",
+            "category" => "amenity",
+            "type" => "restaurant"
+          },
+          %{
+            "place_id" => 502,
+            "lat" => "59.34",
+            "lon" => "18.08",
+            "name" => "Old Camp",
+            "class" => "tourism",
+            "type" => "camp_site"
+          },
+          %{
+            "place_id" => 503,
+            "lat" => "59.35",
+            "lon" => "18.09",
+            "display_name" => "111 51, Stockholm, Sweden",
+            "type" => "postcode",
+            "addresstype" => "postcode",
+            "address" => %{
+              "postcode" => "111 51",
+              "city" => "Stockholm",
+              "country" => "Sweden"
+            }
+          }
+        ])
+      end)
+
+      assert {:ok, [restaurant, camp, postcode]} = Search.search_external("mixed")
+
+      assert restaurant.kind == :category
+      assert restaurant.kind_label == "Restaurant"
+      assert camp.kind == :category
+      assert camp.kind_label == "Camp site"
+      assert postcode.kind == :address
+      assert postcode.kind_label == "Address"
+      assert postcode.address == "Stockholm, 111 51, Sweden"
+    end
+
+    test "retries address-like searches with structured street params when free-form is empty" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, 2, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        case conn.query_params do
+          %{"q" => "hövägen 7"} ->
+            refute Map.has_key?(conn.query_params, "street")
+            refute Map.has_key?(conn.query_params, "bounded")
+            Req.Test.json(conn, [])
+
+          %{"street" => "hövägen 7"} ->
+            refute Map.has_key?(conn.query_params, "q")
+            refute Map.has_key?(conn.query_params, "bounded")
+            assert conn.query_params["format"] == "jsonv2"
+            assert conn.query_params["addressdetails"] == "1"
+            assert conn.query_params["limit"] == "5"
+
+            Req.Test.json(conn, [
+              %{
+                "place_id" => 777,
+                "lat" => "59.1",
+                "lon" => "18.2",
+                "display_name" => "Hövägen 7, Teststad, Sweden",
+                "category" => "place",
+                "type" => "house",
+                "addresstype" => "house",
+                "address" => %{
+                  "house_number" => "7",
+                  "road" => "Hövägen",
+                  "city" => "Teststad",
+                  "country" => "Sweden"
+                }
+              }
+            ])
+        end
+      end)
+
+      assert {:ok, [result]} = Search.search_external("hövägen 7")
+      assert result.id == "external:nominatim:777"
+      assert result.kind == :address
+      assert result.kind_label == "Address"
+      assert result.address == "Hövägen 7, Teststad, Sweden"
+    end
+
+    test "retries address-like searches when free-form returns weak global results" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, 2, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        case conn.query_params do
+          %{"q" => "hövägen 7"} ->
+            Req.Test.json(conn, [
+              %{
+                "place_id" => 700,
+                "lat" => "1.0",
+                "lon" => "2.0",
+                "name" => "7",
+                "display_name" => "7",
+                "category" => "place",
+                "type" => "number"
+              }
+            ])
+
+          %{"street" => "hövägen 7"} ->
+            Req.Test.json(conn, [
+              %{
+                "place_id" => 701,
+                "lat" => "59.1",
+                "lon" => "18.2",
+                "display_name" => "Hövägen 7, Teststad, Sweden",
+                "category" => "place",
+                "type" => "house",
+                "addresstype" => "house",
+                "address" => %{
+                  "house_number" => "7",
+                  "road" => "Hövägen",
+                  "city" => "Teststad",
+                  "country" => "Sweden"
+                }
+              }
+            ])
+        end
+      end)
+
+      assert {:ok, [structured, weak]} = Search.search_external("hövägen 7")
+      assert structured.id == "external:nominatim:701"
+      assert structured.kind == :address
+      assert weak.id == "external:nominatim:700"
+    end
+
+    test "preserves free-form results when they already contain a useful address match" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        assert conn.query_params["q"] == "hövägen 7"
+        refute Map.has_key?(conn.query_params, "street")
+
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 702,
+            "lat" => "59.1",
+            "lon" => "18.2",
+            "display_name" => "Hövägen 7, Teststad, Sweden",
+            "category" => "place",
+            "type" => "house",
+            "addresstype" => "house",
+            "address" => %{
+              "house_number" => "7",
+              "road" => "Hövägen",
+              "city" => "Teststad",
+              "country" => "Sweden"
+            }
+          }
+        ])
+      end)
+
+      assert {:ok, [result]} = Search.search_external("hövägen 7")
+      assert result.id == "external:nominatim:702"
+      assert result.address == "Hövägen 7, Teststad, Sweden"
+    end
+
+    test "keeps structured retry scoped to the existing viewbox bias" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, 2, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        assert conn.query_params["viewbox"] == "17.9,59.4,18.2,59.1"
+
+        case conn.query_params do
+          %{"q" => "hövägen 7"} ->
+            Req.Test.json(conn, [])
+
+          %{"street" => "hövägen 7"} ->
+            refute Map.has_key?(conn.query_params, "q")
+            assert conn.query_params["bounded"] == "1"
+            Req.Test.json(conn, [])
+        end
+      end)
+
+      assert {:ok, []} =
+               Search.search_external("hövägen 7",
+                 bounds: %{west: 17.9, south: 59.1, east: 18.2, north: 59.4}
+               )
+    end
+
+    test "drops weak global results when bounded structured retry finds no local address" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, 2, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        case conn.query_params do
+          %{"q" => "hövägen 7"} ->
+            Req.Test.json(conn, [
+              %{
+                "place_id" => 800,
+                "lat" => "60.281",
+                "lon" => "25.028",
+                "name" => "7",
+                "display_name" => "7, Heinätie, Helsinki, Suomi / Finland",
+                "category" => "place",
+                "type" => "house",
+                "addresstype" => "house",
+                "address" => %{
+                  "house_number" => "7",
+                  "road" => "Heinätie",
+                  "city" => "Helsinki",
+                  "country" => "Suomi / Finland"
+                }
+              }
+            ])
+
+          %{"street" => "hövägen 7"} ->
+            assert conn.query_params["bounded"] == "1"
+            Req.Test.json(conn, [])
+        end
+      end)
+
+      assert {:ok, []} =
+               Search.search_external("hövägen 7",
+                 bounds: %{west: 17.9, south: 59.1, east: 18.2, north: 59.4}
+               )
+    end
+
+    property "accepted provider payloads normalize to safe finite external results" do
+      check all(payload <- provider_payload_gen(), max_runs: 20) do
+        Cache.clear()
+
+        Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+          Req.Test.json(conn, [payload])
+        end)
+
+        assert {:ok, [result]} = Search.search_external("generated place")
+
+        assert result.source == :external
+        assert result.source_label == "Map"
+        assert result.provider == :nominatim
+        assert result.id =~ "external:nominatim:"
+        assert is_binary(result.title)
+        assert String.trim(result.title) != ""
+        assert is_binary(result.kind_label)
+        assert String.trim(result.kind_label) != ""
+        assert %Geo.Point{coordinates: {lng, lat}, srid: 4326} = result.location
+        assert finite?(lat)
+        assert finite?(lng)
+        assert lat >= -90.0 and lat <= 90.0
+        assert lng >= -180.0 and lng <= 180.0
+
+        if result.address do
+          refute String.contains?(result.address, "country_code")
+          refute String.contains?(result.address, "ISO3166")
+          refute String.contains?(result.address, "raw-metadata")
+        end
+      end
+    end
+
+    property "structured address retries never combine q with structured params" do
+      check all(query <- structured_address_query_gen(), max_runs: 20) do
+        Cache.clear()
+
+        Req.Test.expect(Platser.Map.Search.Geocoder, 2, fn conn ->
+          conn = Plug.Conn.fetch_query_params(conn)
+
+          if Map.has_key?(conn.query_params, "q") do
+            refute Map.has_key?(conn.query_params, "street")
+          else
+            assert Map.has_key?(conn.query_params, "street")
+            refute Map.has_key?(conn.query_params, "q")
+            assert String.length(conn.query_params["street"]) <= 120
+          end
+
+          Req.Test.json(conn, [])
+        end)
+
+        assert {:ok, []} = Search.search_external(query)
+      end
+    end
+
     test "category-only searches map known app categories to provider query text" do
       Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
         conn = Plug.Conn.fetch_query_params(conn)
@@ -282,7 +714,7 @@ defmodule Platser.MapSearchTest do
       assert result.title == "Sergels torg, Stockholm, Sweden"
       assert result.subtitle == "59.3293, 18.0686"
       assert result.location == point(18.0686, 59.3293)
-      assert result.address == "Stockholm, Sweden, Sergels torg"
+      assert result.address == "Sergels torg, Stockholm, Sweden"
     end
 
     test "can normalize coordinate input without reverse lookup" do
@@ -299,6 +731,135 @@ defmodule Platser.MapSearchTest do
       end)
 
       assert {:ok, []} = Search.search_external("missing place")
+    end
+
+    test "cache falls back to the uncached function when the process is unavailable" do
+      cache_pid = Process.whereis(Cache)
+      assert is_pid(cache_pid)
+
+      Process.unregister(Cache)
+
+      try do
+        assert {:ok, :fresh_result} =
+                 Cache.fetch(Cache.key(%{query: "missing process"}), fn ->
+                   {:ok, :fresh_result}
+                 end)
+
+        assert :ok = Cache.clear()
+      after
+        if Process.whereis(Cache) == nil and Process.alive?(cache_pid) do
+          Process.register(cache_pid, Cache)
+        end
+      end
+    end
+
+    test "repeated identical external searches use the normalized server-side cache" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, fn conn ->
+        Req.Test.json(conn, [
+          %{
+            "place_id" => 901,
+            "lat" => "59.33",
+            "lon" => "18.07",
+            "name" => "Cached Camp",
+            "category" => "tourism",
+            "type" => "camp_site"
+          }
+        ])
+      end)
+
+      assert {:ok, [first]} = Search.search_external("cached camp", limit: 5)
+      assert {:ok, [second]} = Search.search_external(" cached camp ", limit: 5)
+      assert first.id == "external:nominatim:901"
+      assert second.id == first.id
+    end
+
+    test "cache misses are separated by material provider request params" do
+      Req.Test.expect(Platser.Map.Search.Geocoder, 2, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+        place_id = String.to_integer(conn.query_params["limit"]) + 1_000
+
+        Req.Test.json(conn, [
+          %{
+            "place_id" => place_id,
+            "lat" => "59.33",
+            "lon" => "18.07",
+            "name" => "Limit #{conn.query_params["limit"]}",
+            "category" => "place",
+            "type" => "neighbourhood"
+          }
+        ])
+      end)
+
+      assert {:ok, [limited]} = Search.search_external("cache separated", limit: 5)
+      assert {:ok, [expanded]} = Search.search_external("cache separated", limit: 15)
+      assert limited.id == "external:nominatim:1005"
+      assert expanded.id == "external:nominatim:1015"
+    end
+
+    test "expired entries miss the cache and failures are not cached" do
+      old_ttl = Application.get_env(:platser, :geocoder_cache_ttl_ms)
+      Application.put_env(:platser, :geocoder_cache_ttl_ms, 0)
+
+      on_exit(fn ->
+        Application.put_env(:platser, :geocoder_cache_ttl_ms, old_ttl)
+      end)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, 4, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        case conn.query_params["q"] do
+          "expiring camp" ->
+            Req.Test.json(conn, [
+              %{
+                "place_id" => System.unique_integer([:positive]),
+                "lat" => "59.33",
+                "lon" => "18.07",
+                "name" => "Expiring Camp",
+                "category" => "place",
+                "type" => "neighbourhood"
+              }
+            ])
+
+          "limited once" ->
+            Plug.Conn.send_resp(conn, 429, "too many requests")
+        end
+      end)
+
+      assert {:ok, [_first]} = Search.search_external("expiring camp")
+      assert {:ok, [_second]} = Search.search_external("expiring camp")
+      assert {:error, :provider_rate_limited} = Search.search_external("limited once")
+      assert {:error, :provider_rate_limited} = Search.search_external("limited once")
+    end
+
+    test "cache evicts the oldest entry when the configured maximum is exceeded" do
+      old_max_entries = Application.get_env(:platser, :geocoder_cache_max_entries)
+      Application.put_env(:platser, :geocoder_cache_max_entries, 1)
+
+      on_exit(fn ->
+        Application.put_env(:platser, :geocoder_cache_max_entries, old_max_entries)
+      end)
+
+      Req.Test.expect(Platser.Map.Search.Geocoder, 3, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        Req.Test.json(conn, [
+          %{
+            "place_id" => "cache-#{conn.query_params["q"]}",
+            "lat" => "59.33",
+            "lon" => "18.07",
+            "name" => "Cache #{conn.query_params["q"]}",
+            "category" => "place",
+            "type" => "neighbourhood"
+          }
+        ])
+      end)
+
+      assert {:ok, [first]} = Search.search_external("first bounded cache")
+      assert {:ok, [second]} = Search.search_external("second bounded cache")
+      assert {:ok, [first_again]} = Search.search_external("first bounded cache")
+
+      assert first.id == first_again.id
+      refute first.id == second.id
     end
 
     test "normalizes malformed provider responses" do
@@ -349,6 +910,52 @@ defmodule Platser.MapSearchTest do
 
       assert {:error, :unsupported} = Search.search_external("stockholm", bounded?: true)
       assert {:error, :invalid_query} = Search.search_external("", category: :unknown)
+
+      assert {:error, :invalid_accept_language} =
+               Search.search_external("stockholm", accept_language: "<script>")
+
+      assert {:error, :invalid_countrycodes} =
+               Search.search_external("stockholm", countrycodes: ["swe"])
+    end
+
+    property "generated invalid bounds are rejected before provider requests" do
+      check all(bounds <- invalid_bounds_gen(), max_runs: 20) do
+        assert {:error, :invalid_bounds} =
+                 Search.search_external("generated park", bounds: bounds)
+      end
+    end
+
+    property "equivalent normalized inputs map to the same cache key" do
+      check all(query <- safe_query_gen(), max_runs: 20) do
+        assert {:ok, first_key} = Geocoder.cache_key("  #{query}  ", limit: 5)
+        assert {:ok, second_key} = Geocoder.cache_key(query, limit: 5)
+        assert first_key == second_key
+      end
+    end
+
+    property "materially different params map to different cache keys without creating atoms" do
+      check all(
+              query <- safe_query_gen(),
+              bounds <- valid_bounds_gen(),
+              max_runs: 20
+            ) do
+        before_atoms = :erlang.system_info(:atom_count)
+
+        assert {:ok, base_key} = Geocoder.cache_key(query, limit: 5)
+
+        assert {:ok, bounded_key} =
+                 Geocoder.cache_key(query,
+                   limit: 5,
+                   bounds: bounds,
+                   accept_language: "sv-SE",
+                   countrycodes: ["SE"]
+                 )
+
+        assert {:ok, expanded_key} = Geocoder.cache_key(query, limit: 15)
+        refute base_key == bounded_key
+        refute base_key == expanded_key
+        assert :erlang.system_info(:atom_count) == before_atoms
+      end
     end
   end
 
@@ -428,6 +1035,21 @@ defmodule Platser.MapSearchTest do
   @spec finite?(float()) :: boolean()
   defp finite?(value), do: value == value and value - value == 0.0
 
+  @spec invalid_search_limit_gen() :: StreamData.t(integer())
+  defp invalid_search_limit_gen do
+    StreamData.one_of([
+      StreamData.integer(-20..0),
+      StreamData.integer(41..120)
+    ])
+  end
+
+  @spec safe_query_gen() :: StreamData.t(String.t())
+  defp safe_query_gen do
+    StreamData.string(:alphanumeric, min_length: 1, max_length: 32)
+    |> StreamData.map(&String.trim/1)
+    |> StreamData.filter(&(&1 != ""))
+  end
+
   @spec invalid_coordinate_pair_gen() :: StreamData.t({float(), float()})
   defp invalid_coordinate_pair_gen do
     StreamData.one_of([
@@ -446,6 +1068,161 @@ defmodule Platser.MapSearchTest do
         ])
       })
     ])
+  end
+
+  @spec valid_bounds_gen() :: StreamData.t(Result.bounds())
+  defp valid_bounds_gen do
+    StreamData.bind(
+      StreamData.tuple({
+        StreamData.float(min: -179.0, max: 179.0),
+        StreamData.float(min: -89.0, max: 89.0),
+        StreamData.float(min: 0.01, max: 1.0),
+        StreamData.float(min: 0.01, max: 1.0)
+      }),
+      fn {west, south, lng_delta, lat_delta} ->
+        StreamData.constant(%{
+          west: west,
+          south: south,
+          east: min(west + lng_delta, 180.0),
+          north: min(south + lat_delta, 90.0)
+        })
+      end
+    )
+  end
+
+  @spec invalid_bounds_gen() :: StreamData.t(map())
+  defp invalid_bounds_gen do
+    StreamData.one_of([
+      StreamData.map(
+        StreamData.tuple({
+          StreamData.float(min: -180.0, max: 180.0),
+          StreamData.float(min: -90.0, max: 90.0)
+        }),
+        fn {west, south} ->
+          %{west: west, south: south, east: west - 0.01, north: south + 0.01}
+        end
+      ),
+      StreamData.map(
+        StreamData.tuple({
+          StreamData.float(min: -180.0, max: 180.0),
+          StreamData.float(min: -90.0, max: 90.0)
+        }),
+        fn {west, south} ->
+          %{west: west, south: south, east: west + 0.01, north: south - 0.01}
+        end
+      ),
+      StreamData.constant(%{west: 181.0, south: 0.0, east: 182.0, north: 1.0}),
+      StreamData.constant(%{west: 0.0, south: -91.0, east: 1.0, north: -90.0})
+    ])
+  end
+
+  @spec structured_address_query_gen() :: StreamData.t(String.t())
+  defp structured_address_query_gen do
+    StreamData.bind(street_name_gen(), fn street ->
+      StreamData.bind(StreamData.integer(1..999), fn house_number ->
+        StreamData.member_of([
+          "#{street} #{house_number}",
+          "#{house_number} #{street}",
+          "#{street} #{house_number}, Teststad",
+          "#{street} #{house_number}, 123 45",
+          "123 45, #{street} #{house_number}"
+        ])
+      end)
+    end)
+  end
+
+  @spec street_name_gen() :: StreamData.t(String.t())
+  defp street_name_gen do
+    StreamData.member_of(["Hövägen", "Drottninggatan", "Generated Road", "Storgatan"])
+  end
+
+  @spec provider_payload_gen() :: StreamData.t(map())
+  defp provider_payload_gen do
+    StreamData.bind(
+      StreamData.tuple({
+        StreamData.integer(1..1_000_000),
+        StreamData.float(min: -90.0, max: 90.0),
+        StreamData.float(min: -180.0, max: 180.0),
+        provider_shape_gen()
+      }),
+      fn {place_id, lat, lng, shape} ->
+        StreamData.constant(provider_payload(place_id, lat, lng, shape))
+      end
+    )
+  end
+
+  @spec provider_shape_gen() :: StreamData.t(atom())
+  defp provider_shape_gen do
+    StreamData.member_of([:jsonv2_house, :jsonv2_restaurant, :json_camp, :postcode])
+  end
+
+  @spec provider_payload(pos_integer(), float(), float(), atom()) :: map()
+  defp provider_payload(place_id, lat, lng, :jsonv2_house) do
+    %{
+      "place_id" => place_id,
+      "lat" => Float.to_string(lat),
+      "lon" => Float.to_string(lng),
+      "display_name" => "Generated Road 7, Test City, Sweden",
+      "category" => "place",
+      "type" => "house",
+      "addresstype" => "house",
+      "address" => generated_address("7")
+    }
+  end
+
+  defp provider_payload(place_id, lat, lng, :jsonv2_restaurant) do
+    %{
+      "place_id" => place_id,
+      "lat" => Float.to_string(lat),
+      "lon" => Float.to_string(lng),
+      "name" => "Generated Restaurant",
+      "category" => "amenity",
+      "type" => "restaurant",
+      "address" => generated_address(nil)
+    }
+  end
+
+  defp provider_payload(place_id, lat, lng, :json_camp) do
+    %{
+      "place_id" => place_id,
+      "lat" => Float.to_string(lat),
+      "lon" => Float.to_string(lng),
+      "name" => "Generated Camp",
+      "class" => "tourism",
+      "type" => "camp_site",
+      "address" => generated_address(nil)
+    }
+  end
+
+  defp provider_payload(place_id, lat, lng, :postcode) do
+    %{
+      "place_id" => place_id,
+      "lat" => Float.to_string(lat),
+      "lon" => Float.to_string(lng),
+      "display_name" => "123 45, Test City, Sweden",
+      "type" => "postcode",
+      "addresstype" => "postcode",
+      "address" => %{
+        "postcode" => "123 45",
+        "city" => "Test City",
+        "country" => "Sweden",
+        "country_code" => "raw-metadata",
+        "ISO3166-2-lvl4" => "raw-metadata"
+      }
+    }
+  end
+
+  @spec generated_address(String.t() | nil) :: map()
+  defp generated_address(house_number) do
+    %{
+      "house_number" => house_number,
+      "road" => "Generated Road",
+      "city" => "Test City",
+      "postcode" => "123 45",
+      "country" => "Sweden",
+      "country_code" => "raw-metadata",
+      "ISO3166-2-lvl4" => "raw-metadata"
+    }
   end
 
   @spec assert_internal_result(Result.t(), Platser.Map.Poi.t(), String.t()) :: true

@@ -111,6 +111,17 @@ function extendBounds(bounds, coordinates) {
   return bounds
 }
 
+function currentMapBounds(map) {
+  const b = map.getBounds()
+
+  return {
+    west: b.getWest(),
+    south: b.getSouth(),
+    east: b.getEast(),
+    north: b.getNorth(),
+  }
+}
+
 function pointsEqual(a, b) {
   return a[0] === b[0] && a[1] === b[1]
 }
@@ -266,12 +277,12 @@ export default {
 
     this._onSetBoundsClick = e => {
       if (e.target.closest("[data-set-map-area]") && this.map) {
-        const b = this.map.getBounds()
+        const b = currentMapBounds(this.map)
         this.pushEvent("save_map_bounds", {
-          west: b.getWest(),
-          south: b.getSouth(),
-          east: b.getEast(),
-          north: b.getNorth(),
+          west: b.west,
+          south: b.south,
+          east: b.east,
+          north: b.north,
         })
       }
     }
@@ -309,6 +320,14 @@ export default {
       }
     }
     document.addEventListener("click", this._onClearTemporarySearchPinClick)
+
+    this._onSearchSubmit = e => {
+      const form = e.target.closest?.("#map-search-form")
+      if (form && this.map) {
+        this._writeSearchViewportBounds(form)
+      }
+    }
+    document.addEventListener("submit", this._onSearchSubmit, true)
 
     this.map.on("load", () => {
       this.mapReady = true
@@ -483,6 +502,21 @@ export default {
     } else {
       this.pendingCallbacks.push(fn)
     }
+  },
+
+  _writeSearchViewportBounds(form) {
+    const bounds = currentMapBounds(this.map)
+    const fields = {
+      viewport_west: bounds.west,
+      viewport_south: bounds.south,
+      viewport_east: bounds.east,
+      viewport_north: bounds.north,
+    }
+
+    Object.entries(fields).forEach(([name, value]) => {
+      const input = form.querySelector(`input[name="search[${name}]"]`)
+      if (input) input.value = String(value)
+    })
   },
 
   _enablePickMode() {
@@ -1164,6 +1198,9 @@ export default {
     }
     if (this._onClearTemporarySearchPinClick) {
       document.removeEventListener("click", this._onClearTemporarySearchPinClick)
+    }
+    if (this._onSearchSubmit) {
+      document.removeEventListener("submit", this._onSearchSubmit, true)
     }
     this.hoverPopup?.remove()
     this.map?.remove()

@@ -48,6 +48,7 @@ defmodule PlatserWeb.MapLive do
   @type geofence_step :: :idle | :drawing | :editing
   @type editing_published :: boolean()
   @type activity_filter :: Activity.feed_filter()
+  @type map_bounds :: %{west: float(), south: float(), east: float(), north: float()}
   @type selected_map_object_activity_filter :: :all | :comments | :updates
   @type selected_map_object :: %{
           kind: MapInspection.kind(),
@@ -56,6 +57,11 @@ defmodule PlatserWeb.MapLive do
         }
   @type editing_id :: Ecto.UUID.t() | nil
   @type search_state :: :idle | :results | :empty | :error
+  @type map_search_limit :: 1..40
+
+  @map_search_default_limit 5
+  @map_search_more_step 10
+  @map_search_max_limit 40
 
   @impl Phoenix.LiveView
   def mount(params, session, socket) do
@@ -120,8 +126,10 @@ defmodule PlatserWeb.MapLive do
             |> assign(:map_search_query, "")
             |> assign(:map_search_results, [])
             |> assign(:map_search_state, :idle)
+            |> assign(:map_search_limit, @map_search_default_limit)
             |> assign(:map_search_collapsed?, false)
             |> assign(:selected_map_search_result, nil)
+            |> assign(:map_viewport_bounds, nil)
             |> assign(:in_event_boundary?, presence_in_boundary?(current_location, geofences))
             |> allow_upload(:photos,
               accept: ~w(.jpg .jpeg .png .webp),
@@ -391,14 +399,17 @@ defmodule PlatserWeb.MapLive do
     {:noreply, socket}
   end
 
-  def handle_event("search_map", %{"search" => %{"query" => query}}, socket) do
+  def handle_event("search_map", %{"search" => %{"query" => query} = search_params}, socket) do
     query = String.trim(query || "")
+    viewport_bounds = viewport_bounds_from_search_params(search_params)
 
     socket =
       socket
       |> assign(:map_search_form, to_form(%{"query" => query}, as: :search))
       |> assign(:map_search_query, query)
+      |> assign(:map_search_limit, @map_search_default_limit)
       |> assign(:map_search_collapsed?, false)
+      |> assign(:map_viewport_bounds, viewport_bounds)
 
     if query == "" do
       {:noreply,
@@ -412,6 +423,28 @@ defmodule PlatserWeb.MapLive do
 
   def handle_event("search_map", _params, socket) do
     {:noreply, socket}
+  end
+
+  def handle_event("show_more_map_search_results", _params, socket) do
+    query = String.trim(socket.assigns.map_search_query || "")
+
+    cond do
+      query == "" ->
+        {:noreply, socket}
+
+      socket.assigns.map_search_limit >= @map_search_max_limit ->
+        {:noreply, socket}
+
+      true ->
+        socket =
+          assign(
+            socket,
+            :map_search_limit,
+            min(socket.assigns.map_search_limit + @map_search_more_step, @map_search_max_limit)
+          )
+
+        search_map_sources(socket, query)
+    end
   end
 
   def handle_event("set_selected_map_object_activity_filter", %{"filter" => filter}, socket) do
@@ -1303,6 +1336,7 @@ defmodule PlatserWeb.MapLive do
     |> assign(:map_search_query, "")
     |> assign(:map_search_results, [])
     |> assign(:map_search_state, :idle)
+    |> assign(:map_search_limit, @map_search_default_limit)
   end
 
   @spec find_map_search_result([SearchResult.t()], String.t()) :: SearchResult.t() | nil
@@ -1369,7 +1403,10 @@ defmodule PlatserWeb.MapLive do
 
     case {internal_result, external_result} do
       {{:ok, internal_results}, {:ok, external_results}} ->
-        results = combine_search_results(internal_results, external_results)
+        results =
+          internal_results
+          |> combine_search_results(external_results)
+          |> cap_search_results(socket.assigns.map_search_limit)
 
         {:noreply,
          socket
@@ -1377,17 +1414,21 @@ defmodule PlatserWeb.MapLive do
          |> assign(:map_search_state, search_state_for_results(results))}
 
       {{:ok, internal_results}, {:error, reason}} ->
+        results = cap_search_results(internal_results, socket.assigns.map_search_limit)
+
         {:noreply,
          socket
-         |> assign(:map_search_results, internal_results)
-         |> assign(:map_search_state, search_state_for_results(internal_results))
+         |> assign(:map_search_results, results)
+         |> assign(:map_search_state, search_state_for_results(results))
          |> put_flash(:error, map_search_error_message(reason))}
 
       {{:error, reason}, {:ok, external_results}} ->
+        results = cap_search_results(external_results, socket.assigns.map_search_limit)
+
         {:noreply,
          socket
-         |> assign(:map_search_results, external_results)
-         |> assign(:map_search_state, search_state_for_results(external_results))
+         |> assign(:map_search_results, results)
+         |> assign(:map_search_state, search_state_for_results(results))
          |> put_flash(:error, map_search_error_message(reason))}
 
       {{:error, reason}, {:error, _external_reason}} ->
@@ -1402,16 +1443,80 @@ defmodule PlatserWeb.MapLive do
   @spec map_search_opts(Phoenix.LiveView.Socket.t()) :: Search.search_opts()
   defp map_search_opts(socket) do
     [
-      limit: 5,
-      bounds:
-        bounds_to_map(socket.assigns.event.bounds) ||
-          compute_fallback_bounds(socket.assigns.pois, socket.assigns.geofences)
+      limit: socket.assigns.map_search_limit,
+      bounds: search_bias_bounds(socket),
+      accept_language: map_search_accept_language(),
+      countrycodes: map_search_countrycodes()
     ]
+  end
+
+  @spec search_bias_bounds(Phoenix.LiveView.Socket.t()) :: map_bounds() | nil
+  defp search_bias_bounds(socket) do
+    socket.assigns.map_viewport_bounds ||
+      bounds_to_map(socket.assigns.event.bounds) ||
+      compute_fallback_bounds(socket.assigns.pois, socket.assigns.geofences)
+  end
+
+  @spec viewport_bounds_from_search_params(map()) :: map_bounds() | nil
+  defp viewport_bounds_from_search_params(params) do
+    with {:ok, west} <- float_param(params, "viewport_west"),
+         {:ok, south} <- float_param(params, "viewport_south"),
+         {:ok, east} <- float_param(params, "viewport_east"),
+         {:ok, north} <- float_param(params, "viewport_north"),
+         :ok <- validate_bounds(west, south, east, north) do
+      %{west: west, south: south, east: east, north: north}
+    else
+      _invalid_or_missing -> nil
+    end
+  end
+
+  @spec float_param(map(), String.t()) :: {:ok, float()} | :error
+  defp float_param(params, key) do
+    case Map.get(params, key) do
+      value when is_float(value) ->
+        {:ok, value}
+
+      value when is_integer(value) ->
+        {:ok, value * 1.0}
+
+      value when is_binary(value) ->
+        case Float.parse(value) do
+          {float, ""} -> {:ok, float}
+          _parse_error -> :error
+        end
+
+      _value ->
+        :error
+    end
+  end
+
+  @spec map_search_accept_language() :: String.t() | nil
+  defp map_search_accept_language do
+    Application.get_env(:platser, :geocoder_accept_language)
+  end
+
+  @spec map_search_countrycodes() :: [String.t()] | nil
+  defp map_search_countrycodes do
+    Application.get_env(:platser, :geocoder_countrycodes)
   end
 
   @spec combine_search_results([SearchResult.t()], [SearchResult.t()]) :: [SearchResult.t()]
   defp combine_search_results(internal_results, external_results) do
-    internal_results ++ external_results
+    internal_results
+    |> Kernel.++(external_results)
+    |> Enum.uniq_by(& &1.id)
+  end
+
+  @spec cap_search_results([SearchResult.t()], map_search_limit()) :: [SearchResult.t()]
+  defp cap_search_results(results, limit) do
+    Enum.take(results, limit)
+  end
+
+  @spec map_search_more_results?(Phoenix.LiveView.Socket.assigns()) :: boolean()
+  defp map_search_more_results?(assigns) do
+    assigns.map_search_state == :results and
+      length(assigns.map_search_results) >= assigns.map_search_limit and
+      assigns.map_search_limit < @map_search_max_limit
   end
 
   @spec search_state_for_results([SearchResult.t()]) :: search_state()
@@ -1422,6 +1527,11 @@ defmodule PlatserWeb.MapLive do
   defp map_search_error_message(:invalid_query), do: "Enter a place, POI name, or coordinates."
   defp map_search_error_message(:invalid_limit), do: "Search could not run with that limit."
   defp map_search_error_message(:invalid_bounds), do: "Search could not use the current map area."
+  defp map_search_error_message(:invalid_accept_language), do: "Search could not use that locale."
+
+  defp map_search_error_message(:invalid_countrycodes),
+    do: "Search could not use that country filter."
+
   defp map_search_error_message(:unsupported), do: "That search is not supported yet."
   defp map_search_error_message(:provider_timeout), do: "Map search timed out. Try again."
   defp map_search_error_message(:provider_rate_limited), do: "Map search is busy. Try again soon."
@@ -1988,6 +2098,10 @@ defmodule PlatserWeb.MapLive do
                 class="flex items-start gap-2 px-3 py-3"
               >
                 <div class="flex-1">
+                  <input id="map-search-viewport-west" type="hidden" name="search[viewport_west]" />
+                  <input id="map-search-viewport-south" type="hidden" name="search[viewport_south]" />
+                  <input id="map-search-viewport-east" type="hidden" name="search[viewport_east]" />
+                  <input id="map-search-viewport-north" type="hidden" name="search[viewport_north]" />
                   <.input
                     id="map-search-input"
                     field={@map_search_form[:query]}
@@ -2075,6 +2189,18 @@ defmodule PlatserWeb.MapLive do
                         </button>
                       <% end %>
                     </div>
+                    <%= if map_search_more_results?(assigns) do %>
+                      <div class="border-t border-gray-100 bg-gray-50/80 px-4 py-3">
+                        <button
+                          id="map-search-more-results"
+                          type="button"
+                          phx-click="show_more_map_search_results"
+                          class="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 active:scale-[0.99]"
+                        >
+                          <.icon name="hero-plus" class="w-4 h-4" /> More results
+                        </button>
+                      </div>
+                    <% end %>
                   <% end %>
                 </div>
               <% end %>

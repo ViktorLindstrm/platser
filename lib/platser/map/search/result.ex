@@ -10,6 +10,8 @@ defmodule Platser.Map.Search.Result do
           :invalid_limit
           | :invalid_query
           | :invalid_bounds
+          | :invalid_accept_language
+          | :invalid_countrycodes
           | :unsupported
           | :provider_timeout
           | :provider_rate_limited

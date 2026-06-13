@@ -15,13 +15,17 @@ defmodule Platser.Map.Search do
   @type poi_category :: :viewpoint | :camp | :hazard | :meeting_point | :food | :other
   @type search_error :: Result.error_reason()
   @type bounds :: Result.bounds()
-  @type limit :: 1..50
+  @type accept_language :: String.t()
+  @type countrycode :: <<_::16>>
+  @type limit :: 1..40
   @type search_opts :: [
           origin: Geo.Point.t() | nil,
           nearby_radius_m: non_neg_integer(),
           limit: limit(),
           bounds: bounds() | nil,
           bounded?: boolean(),
+          accept_language: accept_language() | nil,
+          countrycodes: [countrycode()] | nil,
           category: poi_category() | nil,
           reverse?: boolean()
         ]
@@ -112,7 +116,7 @@ defmodule Platser.Map.Search do
   defp fetch_limit(opts) do
     limit = Keyword.get(opts, :limit, @default_limit)
 
-    if is_integer(limit) and limit in 1..50 do
+    if is_integer(limit) and limit in 1..40 do
       {:ok, limit}
     else
       {:error, :invalid_limit}

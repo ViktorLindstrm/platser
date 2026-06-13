@@ -83,6 +83,18 @@ config :platser,
        :geocoder_rate_limit_public?,
        true
 
+config :platser,
+       :geocoder_cache_enabled?,
+       true
+
+config :platser,
+       :geocoder_cache_ttl_ms,
+       60_000
+
+config :platser,
+       :geocoder_cache_max_entries,
+       256
+
 # Configure the endpoint
 config :platser, PlatserWeb.Endpoint,
   url: [host: "localhost"],

@@ -99,7 +99,8 @@ need to distinguish event-created POIs from map-provider findings; provider deta
 implementation concern.
 
 Internal results should sort before external results when relevance is otherwise similar
-because they represent event-specific knowledge.
+because they represent event-specific knowledge. The LiveView applies the selected rendered
+result cap after combined source ordering and normalized result-id dedupe.
 
 ### Search semantics
 
@@ -116,7 +117,18 @@ Internal search:
 External search:
 
 - Name and address search use Nominatim `/search` with machine-readable JSON output,
-  `addressdetails=1`, a small `limit`, and event/map bounds as a `viewbox` bias when available.
+  `addressdetails=1`, a small first-page `limit`, and event/map bounds as a `viewbox` bias when
+  available.
+- Result volume is user-controlled. The first rendered page stays small, and an explicit
+  "More results" action may increase the cap for the same submitted query up to Nominatim's
+  documented maximum of 40 results. This is not autocomplete and must not become systematic area
+  download behavior.
+- The search bounds preference is current browser viewport from the submitted search form when
+  valid, then explicit event bounds, then object-derived fallback bounds. Invalid browser viewport
+  payloads are ignored and do not make provider searches fail.
+- Runtime `accept-language` and explicit ISO alpha-2 `countrycodes` settings may be forwarded to
+  Nominatim-compatible providers. Country codes are hard filters and must not be guessed from
+  bounds.
 - If the user explicitly asks for nearby results and the UI provides a map viewport or event
   bounds, use `viewbox`; use `bounded=1` only when the user intent is explicitly constrained to
   the event/map area.
