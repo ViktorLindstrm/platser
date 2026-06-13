@@ -1,4 +1,6 @@
 defmodule Platser.Map.Poi do
+  @manage_any_map_item_roles Platser.Events.MapAccess.roles_for_capability(:manage_any_map_item)
+
   use Ash.Resource,
     otp_app: :platser,
     domain: Platser.Map,
@@ -76,7 +78,7 @@ defmodule Platser.Map.Poi do
                           exists(
                             event.memberships,
                             user_id == ^actor(:id) and
-                              role in [:full_manager, :content_manager, :admin]
+                              role in ^@manage_any_map_item_roles
                           ))
                    )
     end
@@ -92,7 +94,7 @@ defmodule Platser.Map.Poi do
                      exists(
                        event.memberships,
                        user_id == ^actor(:id) and
-                         role in [:full_manager, :content_manager, :admin]
+                         role in ^@manage_any_map_item_roles
                      )
                    )
     end
@@ -104,7 +106,7 @@ defmodule Platser.Map.Poi do
                      exists(
                        event.memberships,
                        user_id == ^actor(:id) and
-                         role in [:full_manager, :content_manager, :admin]
+                         role in ^@manage_any_map_item_roles
                      )
                    )
     end
@@ -116,7 +118,7 @@ defmodule Platser.Map.Poi do
                      exists(
                        event.memberships,
                        user_id == ^actor(:id) and
-                         role in [:full_manager, :content_manager, :admin]
+                         role in ^@manage_any_map_item_roles
                      )
                    )
 
@@ -133,7 +135,7 @@ defmodule Platser.Map.Poi do
                      exists(
                        event.memberships,
                        user_id == ^actor(:id) and
-                         role in [:full_manager, :content_manager, :admin]
+                         role in ^@manage_any_map_item_roles
                      )
                    )
     end
@@ -145,7 +147,7 @@ defmodule Platser.Map.Poi do
                      exists(
                        event.memberships,
                        user_id == ^actor(:id) and
-                         role in [:full_manager, :content_manager, :admin]
+                         role in ^@manage_any_map_item_roles
                      )
                    )
     end

@@ -79,3 +79,19 @@ Both actions return `Ash.Error.Invalid` on validation failure. The `DashboardLiv
 2. **Soft delete**: Keep removed memberships but mark them as inactive (e.g., `removed_at` timestamp)
 3. **Role hierarchy**: Support owner-only actions (e.g., delete event)
 4. **Bulk operations**: Remove/promote multiple members at once
+
+## Amendment: Map manager capability model (ADR-0042)
+
+ADR-0042 supersedes this ADR's event-scoped `admin`/`member` vocabulary.
+Current member-management authorization is based on `Platser.Events.MapAccess`
+capabilities:
+
+- `manage_members` is required for removing members and changing membership
+  roles.
+- `manage_members` is granted to `:full_manager` and legacy `:admin` only.
+- `:content_manager` can moderate map content, but cannot manage members or
+  permission levels.
+- Site-wide `Accounts.User.superuser` does not grant member-management powers.
+
+The last-admin guard is now the last-full-map-manager guard: an event must retain
+at least one `:full_manager`/legacy `:admin` membership.

@@ -4,6 +4,7 @@ defmodule PlatserWeb.Events.JoinLive do
   require Ash.Query
 
   alias Platser.Events
+  alias Platser.Events.MapAccess
   alias Platser.Events.Membership
 
   @type join_status :: :show | :already_member | :manager | :not_found | :joined | :guest_form
@@ -303,10 +304,9 @@ defmodule PlatserWeb.Events.JoinLive do
   @spec resolve_status(Membership.t() | nil) :: join_status()
   defp resolve_status(nil), do: :show
 
-  defp resolve_status(%Membership{role: role}) when role in [:full_manager, :admin],
-    do: :manager
-
-  defp resolve_status(%Membership{}), do: :already_member
+  defp resolve_status(%Membership{role: role}) do
+    if MapAccess.full_manager?(role), do: :manager, else: :already_member
+  end
 
   @spec format_error(any()) :: String.t()
   defp format_error(%Ash.Error.Invalid{} = error) do

@@ -2,6 +2,7 @@ defmodule Platser.Media.Attachment do
   @opaque_stored_filename_regex ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp)$/
   @safe_filenames ~w(image.jpg image.png image.webp)
   @supported_content_types ~w(image/jpeg image/png image/webp)
+  @manage_any_map_item_roles Platser.Events.MapAccess.roles_for_capability(:manage_any_map_item)
 
   use Ash.Resource,
     otp_app: :platser,
@@ -100,7 +101,7 @@ defmodule Platser.Media.Attachment do
                      exists(
                        poi.event.memberships,
                        user_id == ^actor(:id) and
-                         role in [:full_manager, :content_manager, :admin]
+                         role in ^@manage_any_map_item_roles
                      )
                    )
 
@@ -108,7 +109,7 @@ defmodule Platser.Media.Attachment do
                      exists(
                        geofence.event.memberships,
                        user_id == ^actor(:id) and
-                         role in [:full_manager, :content_manager, :admin]
+                         role in ^@manage_any_map_item_roles
                      )
                    )
     end

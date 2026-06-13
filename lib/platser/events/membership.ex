@@ -1,4 +1,6 @@
 defmodule Platser.Events.Membership do
+  @manage_members_roles Platser.Events.MapAccess.roles_for_capability(:manage_members)
+
   use Ash.Resource,
     otp_app: :platser,
     domain: Platser.Events,
@@ -70,7 +72,7 @@ defmodule Platser.Events.Membership do
                      user_id == ^actor(:id) or
                        exists(
                          event.memberships,
-                         user_id == ^actor(:id) and role in [:full_manager, :admin]
+                         user_id == ^actor(:id) and role in ^@manage_members_roles
                        )
                    )
     end
@@ -87,7 +89,7 @@ defmodule Platser.Events.Membership do
       authorize_if expr(
                      exists(
                        event.memberships,
-                       user_id == ^actor(:id) and role in [:full_manager, :admin]
+                       user_id == ^actor(:id) and role in ^@manage_members_roles
                      )
                    )
     end
@@ -96,7 +98,7 @@ defmodule Platser.Events.Membership do
       authorize_if expr(
                      exists(
                        event.memberships,
-                       user_id == ^actor(:id) and role in [:full_manager, :admin]
+                       user_id == ^actor(:id) and role in ^@manage_members_roles
                      )
                    )
     end

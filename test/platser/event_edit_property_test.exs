@@ -7,8 +7,8 @@ defmodule Platser.EventEditPropertyTest do
   @moduledoc """
   StreamData property tests for the update action on Event resources.
   Verifies that:
-  - Admin members can update event name, description, and dates
-  - Non-admin members cannot update events (authorization error)
+  - Map managers can update event name, description, and dates
+  - Members cannot update events (authorization error)
   - Empty names are rejected (validation error)
   """
 
@@ -64,8 +64,7 @@ defmodule Platser.EventEditPropertyTest do
     event
   end
 
-  defp add_member(event, user, :member) do
-    # For non-admin members, we use raw SQL since there's no public create action for members
+  defp add_member(event, user, :participant) do
     event_uuid = Ecto.UUID.dump!(event.id)
     user_uuid = Ecto.UUID.dump!(user.id)
 
@@ -74,7 +73,7 @@ defmodule Platser.EventEditPropertyTest do
         Platser.Repo,
         """
         INSERT INTO memberships (id, event_id, user_id, role, joined_at)
-        VALUES (gen_random_uuid(), $1, $2, 'member', now())
+        VALUES (gen_random_uuid(), $1, $2, 'participant', now())
         RETURNING id
         """,
         [event_uuid, user_uuid]
@@ -87,7 +86,7 @@ defmodule Platser.EventEditPropertyTest do
       id: load_uuid,
       event_id: event.id,
       user_id: user.id,
-      role: :member
+      role: :participant
     }
   end
 
@@ -160,7 +159,7 @@ defmodule Platser.EventEditPropertyTest do
         admin_user = create_user("admin_for_nonmember")
         non_admin_user = create_user("non_admin")
         event = create_event(admin_user)
-        add_member(event, non_admin_user, :member)
+        add_member(event, non_admin_user, :participant)
 
         result = Events.update_event(event, %{name: new_name}, actor: non_admin_user)
 

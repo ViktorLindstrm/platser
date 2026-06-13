@@ -1,4 +1,6 @@
 defmodule Platser.Events.Changes.GuardLastAdmin do
+  @full_manager_roles Platser.Events.MapAccess.roles_for_capability(:manage_members)
+
   use Ash.Resource.Change
 
   @spec change(Ash.Changeset.t(), keyword(), Ash.Resource.Change.Context.t()) ::
@@ -47,7 +49,7 @@ defmodule Platser.Events.Changes.GuardLastAdmin do
   @spec count_full_managers(Ecto.UUID.t()) :: non_neg_integer()
   defp count_full_managers(event_id) do
     Platser.Events.Membership
-    |> Ash.Query.filter(event_id == ^event_id and role in [:full_manager, :admin])
+    |> Ash.Query.filter(event_id == ^event_id and role in ^@full_manager_roles)
     |> Ash.count(authorize?: false)
     |> case do
       {:ok, count} -> count

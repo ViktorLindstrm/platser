@@ -10,6 +10,8 @@ defmodule Platser.Events.MapAccessPropertyTest do
   alias Platser.Events.Event
   alias Platser.Events.MapAccess
   alias Platser.Events.Membership
+  alias Platser.Map
+  alias Platser.Map.Geofence
   alias Platser.Map.Poi
 
   describe "role normalization and capabilities" do
@@ -31,6 +33,17 @@ defmodule Platser.Events.MapAccessPropertyTest do
         if MapAccess.can?(:content_manager, capability) do
           assert MapAccess.can?(:full_manager, capability)
         end
+      end
+    end
+
+    property "policy role lists are derived from the canonical capability table" do
+      check all(capability <- StreamData.member_of(capabilities())) do
+        expected_roles =
+          MapAccess.compatible_roles()
+          |> Enum.filter(&MapAccess.can?(&1, capability))
+          |> Enum.sort()
+
+        assert Enum.sort(MapAccess.roles_for_capability(capability)) == expected_roles
       end
     end
   end
@@ -107,6 +120,68 @@ defmodule Platser.Events.MapAccessPropertyTest do
         assert {:error, _error} = Ash.get(Poi, poi.id, actor: superuser)
       end
     end
+
+    property "only full manager roles can update event settings and member roles" do
+      check all(
+              role <- StreamData.member_of(MapAccess.compatible_roles()),
+              tag <- StreamData.integer(1..1_000_000),
+              max_runs: 12
+            ) do
+        owner = create_user("owner_settings_#{tag}")
+        actor = create_user("actor_settings_#{tag}")
+        target = create_user("target_settings_#{tag}")
+        event = create_event(owner, "Settings Boundary #{tag}")
+
+        insert_membership!(event, actor, role)
+        assert {:ok, target_membership} = Events.join_event(event.join_code, actor: target)
+
+        settings_result =
+          Events.update_event_settings(
+            event,
+            %{allow_participant_comments: true},
+            actor: actor
+          )
+
+        role_result =
+          Events.update_member_role(target_membership, %{role: :content_manager}, actor: actor)
+
+        if MapAccess.can?(role, :manage_event_settings) do
+          assert {:ok, _event} = settings_result
+        else
+          assert {:error, %Ash.Error.Forbidden{}} = settings_result
+        end
+
+        if MapAccess.can?(role, :manage_members) do
+          assert {:ok, _membership} = role_result
+        else
+          assert {:error, %Ash.Error.Forbidden{}} = role_result
+        end
+      end
+    end
+
+    property "map-item capability controls private read, publish, update, and delete" do
+      check all(
+              role <- StreamData.member_of(MapAccess.compatible_roles()),
+              resource <- StreamData.member_of([:poi, :geofence]),
+              action <- StreamData.member_of([:read_private, :publish, :update_metadata, :delete]),
+              tag <- StreamData.integer(1..1_000_000),
+              max_runs: 20
+            ) do
+        owner = create_user("owner_map_item_#{tag}")
+        actor = create_user("actor_map_item_#{tag}")
+        event = create_event(owner, "Map Item Boundary #{tag}")
+        insert_membership!(event, actor, role)
+
+        item = create_private_map_item(resource, event, owner, tag)
+        result = run_map_item_action(action, resource, item, actor, tag)
+
+        if MapAccess.can?(role, :manage_any_map_item) do
+          assert successful_map_item_result?(result)
+        else
+          refute successful_map_item_result?(result)
+        end
+      end
+    end
   end
 
   @spec capabilities() :: [MapAccess.capability()]
@@ -177,7 +252,7 @@ defmodule Platser.Events.MapAccessPropertyTest do
     |> Ash.read_one(actor: actor)
   end
 
-  @spec insert_membership!(Event.t(), User.t(), MapAccess.legacy_role()) :: :ok
+  @spec insert_membership!(Event.t(), User.t(), MapAccess.compatible_role()) :: :ok
   defp insert_membership!(event, user, role) do
     event_uuid = Ecto.UUID.dump!(event.id)
     user_uuid = Ecto.UUID.dump!(user.id)
@@ -221,4 +296,76 @@ defmodule Platser.Events.MapAccessPropertyTest do
 
     poi
   end
+
+  @spec create_private_map_item(:poi | :geofence, Event.t(), User.t(), integer()) ::
+          Poi.t() | Geofence.t()
+  defp create_private_map_item(:poi, event, owner, tag), do: create_private_poi(event, owner, tag)
+
+  defp create_private_map_item(:geofence, event, owner, tag) do
+    {:ok, geofence} =
+      Map.create_geofence(
+        %{
+          event_id: event.id,
+          name: "Private Geofence #{tag}",
+          description: "Private",
+          purpose: :meeting_zone,
+          color: "#22C55E",
+          geometry: %Geo.Polygon{
+            coordinates: [
+              [
+                {18.0, 59.0},
+                {18.01, 59.0},
+                {18.01, 59.01},
+                {18.0, 59.0}
+              ]
+            ],
+            srid: 4326
+          }
+        },
+        actor: owner
+      )
+
+    geofence
+  end
+
+  @spec run_map_item_action(
+          :read_private | :publish | :update_metadata | :delete,
+          :poi | :geofence,
+          Poi.t() | Geofence.t(),
+          User.t(),
+          integer()
+        ) :: :ok | {:ok, Poi.t() | Geofence.t()} | {:error, term()}
+  defp run_map_item_action(:read_private, _resource, item, actor, _tag) do
+    Ash.get(item.__struct__, item.id, actor: actor)
+  end
+
+  defp run_map_item_action(:publish, :poi, item, actor, _tag) do
+    Map.publish_poi(item, actor: actor)
+  end
+
+  defp run_map_item_action(:publish, :geofence, item, actor, _tag) do
+    Map.publish_geofence(item, actor: actor)
+  end
+
+  defp run_map_item_action(:update_metadata, :poi, item, actor, tag) do
+    Map.update_poi_metadata(item, %{name: "Updated POI #{tag}"}, actor: actor)
+  end
+
+  defp run_map_item_action(:update_metadata, :geofence, item, actor, tag) do
+    Map.update_geofence_metadata(item, %{name: "Updated Geofence #{tag}"}, actor: actor)
+  end
+
+  defp run_map_item_action(:delete, :poi, item, actor, _tag) do
+    Map.delete_poi(item, actor: actor)
+  end
+
+  defp run_map_item_action(:delete, :geofence, item, actor, _tag) do
+    Map.delete_geofence(item, actor: actor)
+  end
+
+  @spec successful_map_item_result?(term()) :: boolean()
+  defp successful_map_item_result?(:ok), do: true
+  defp successful_map_item_result?({:ok, %Poi{}}), do: true
+  defp successful_map_item_result?({:ok, %Geofence{}}), do: true
+  defp successful_map_item_result?(_result), do: false
 end

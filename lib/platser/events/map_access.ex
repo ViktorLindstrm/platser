@@ -81,6 +81,11 @@ defmodule Platser.Events.MapAccess do
   @spec can?(compatible_role(), capability()) :: boolean()
   def can?(role, capability), do: capability in capabilities(normalize(role))
 
+  @spec roles_for_capability(capability()) :: [compatible_role()]
+  def roles_for_capability(capability) do
+    Enum.filter(@compatible_roles, &can?(&1, capability))
+  end
+
   @spec full_manager?(compatible_role()) :: boolean()
   def full_manager?(role), do: normalize(role) == :full_manager
 

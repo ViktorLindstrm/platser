@@ -677,7 +677,7 @@ defmodule PlatserWeb.Events.DashboardLive do
                       <.icon name="hero-arrow-up" class="w-4 h-4" />
                     </button>
                   <% end %>
-                  <%= if membership.role == :participant or membership.role == :member do %>
+                  <%= if MapAccess.normalize(membership.role) == :participant do %>
                     <button
                       phx-click="update_member_role"
                       phx-value-id={membership.id}

@@ -50,6 +50,23 @@
 - Site-wide `superuser` remains separate and still does not grant event reads,
   private map-item reads, member-management powers, or settings updates.
 
+### Task #98 Capability Policy Implementation Notes
+
+- Status: implemented.
+- Ash policies now derive role sets from `Platser.Events.MapAccess` capability
+  truth tables instead of spelling direct `:admin`/`:member` assumptions in
+  resources.
+- `manage_any_map_item` governs private map-item visibility and POI/geofence/
+  attachment publish, metadata, and delete moderation.
+- `manage_event_settings`, `manage_join_code`, and `manage_members` remain
+  full-manager-only and do not include `content_manager` or site-wide
+  `superuser`.
+- UI role checks that needed compatibility now use `MapAccess` normalization,
+  keeping UI checks secondary to Ash action authorization.
+- StreamData coverage verifies capability role-list derivation, full-manager
+  boundaries for settings/member actions, content-manager map-item moderation,
+  participant denial for others' private items, and site Admin separation.
+
 1. Capability vocabulary and compatibility helpers.
    - Add a small boundary/domain module for membership levels and capability
      checks with Elixir 1.20 `@type` closed unions and `@spec` on every function.

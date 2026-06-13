@@ -1,4 +1,9 @@
 defmodule Platser.Events.Event do
+  @manage_event_settings_roles Platser.Events.MapAccess.roles_for_capability(
+                                 :manage_event_settings
+                               )
+  @manage_join_code_roles Platser.Events.MapAccess.roles_for_capability(:manage_join_code)
+
   use Ash.Resource,
     otp_app: :platser,
     domain: Platser.Events,
@@ -126,7 +131,7 @@ defmodule Platser.Events.Event do
       authorize_if expr(
                      exists(
                        memberships,
-                       user_id == ^actor(:id) and role in [:full_manager, :admin]
+                       user_id == ^actor(:id) and role in ^@manage_join_code_roles
                      )
                    )
     end
@@ -135,7 +140,7 @@ defmodule Platser.Events.Event do
       authorize_if expr(
                      exists(
                        memberships,
-                       user_id == ^actor(:id) and role in [:full_manager, :admin]
+                       user_id == ^actor(:id) and role in ^@manage_join_code_roles
                      )
                    )
     end
@@ -144,7 +149,7 @@ defmodule Platser.Events.Event do
       authorize_if expr(
                      exists(
                        memberships,
-                       user_id == ^actor(:id) and role in [:full_manager, :admin]
+                       user_id == ^actor(:id) and role in ^@manage_event_settings_roles
                      )
                    )
     end
@@ -153,7 +158,7 @@ defmodule Platser.Events.Event do
       authorize_if expr(
                      exists(
                        memberships,
-                       user_id == ^actor(:id) and role in [:full_manager, :admin]
+                       user_id == ^actor(:id) and role in ^@manage_event_settings_roles
                      )
                    )
     end
@@ -162,7 +167,7 @@ defmodule Platser.Events.Event do
       authorize_if expr(
                      exists(
                        memberships,
-                       user_id == ^actor(:id) and role in [:full_manager, :admin]
+                       user_id == ^actor(:id) and role in ^@manage_event_settings_roles
                      )
                    )
     end
