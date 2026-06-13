@@ -67,6 +67,24 @@
   boundaries for settings/member actions, content-manager map-item moderation,
   participant denial for others' private items, and site Admin separation.
 
+### Task #99 Manager Audit Implementation Notes
+
+- Status: implemented.
+- Added `Platser.Events.ManagerAuditEntry` and migration
+  `20260613154403_create_manager_audit_entries` for append-only manager audit
+  rows.
+- Audited transitions are membership removal, permission changes, join-code
+  regeneration/invalidation, and participation setting changes.
+- Audit writes run from Ash domain action hooks after successful transactions,
+  not from LiveView handlers, and do not create or broadcast public
+  `Activity.Entry` rows.
+- Audit visibility is limited to full map managers through the
+  `view_manager_audit` capability; site-wide `superuser` alone sees no audit
+  rows.
+- DSAR export includes manager audit rows where the subject is actor or target,
+  with identifiers, closed action values, safe metadata, and no join-code
+  secrets or user-facing PII.
+
 1. Capability vocabulary and compatibility helpers.
    - Add a small boundary/domain module for membership levels and capability
      checks with Elixir 1.20 `@type` closed unions and `@spec` on every function.

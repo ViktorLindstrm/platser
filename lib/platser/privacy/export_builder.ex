@@ -13,6 +13,7 @@ defmodule Platser.Privacy.ExportBuilder do
           | :created_pois
           | :created_geofences
           | :activity_entries
+          | :manager_audit_entries
           | :media_attachments
 
   @type export_payload :: %{
@@ -57,6 +58,7 @@ defmodule Platser.Privacy.ExportBuilder do
         created_pois: created_pois(user_id),
         created_geofences: created_geofences(user_id),
         activity_entries: activity_entries(user_id),
+        manager_audit_entries: manager_audit_entries(user_id),
         media_attachments: media_attachments(user_id)
       }
 
@@ -108,6 +110,7 @@ defmodule Platser.Privacy.ExportBuilder do
       inventory_row(:created_pois, "pois", data.created_pois),
       inventory_row(:created_geofences, "geofences", data.created_geofences),
       inventory_row(:activity_entries, "entries", data.activity_entries),
+      inventory_row(:manager_audit_entries, "manager_audit_entries", data.manager_audit_entries),
       inventory_row(:media_attachments, "media_attachments", data.media_attachments)
     ]
   end
@@ -281,6 +284,30 @@ defmodule Platser.Privacy.ExportBuilder do
       stored_filename: a.stored_filename,
       content_type: a.content_type,
       path: a.path,
+      inserted_at: a.inserted_at
+    })
+    |> Repo.all()
+    |> normalize_records()
+  end
+
+  @spec manager_audit_entries(Ecto.UUID.t() | String.t()) :: [map()]
+  defp manager_audit_entries(user_id) do
+    "manager_audit_entries"
+    |> where(
+      [a],
+      a.actor_id == type(^user_id, :binary_id) or a.target_user_id == type(^user_id, :binary_id)
+    )
+    |> order_by([a], asc: a.inserted_at)
+    |> select([a], %{
+      id: a.id,
+      event_id: a.event_id,
+      actor_id: a.actor_id,
+      target_user_id: a.target_user_id,
+      action: a.action,
+      old_value: a.old_value,
+      new_value: a.new_value,
+      message: a.message,
+      metadata: a.metadata,
       inserted_at: a.inserted_at
     })
     |> Repo.all()

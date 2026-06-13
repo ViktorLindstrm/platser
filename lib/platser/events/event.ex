@@ -47,6 +47,7 @@ defmodule Platser.Events.Event do
       description "Replaces the event's join code with a freshly generated one."
       require_atomic? false
       change Platser.Events.Changes.GenerateJoinCode
+      change {Platser.Events.Changes.AuditEventAccessChange, action: :join_code_regenerated}
     end
 
     update :invalidate_join_code do
@@ -60,6 +61,8 @@ defmodule Platser.Events.Event do
           DateTime.utc_now(:second)
         )
       end
+
+      change {Platser.Events.Changes.AuditEventAccessChange, action: :join_code_invalidated}
     end
 
     update :update_settings do
@@ -92,6 +95,9 @@ defmodule Platser.Events.Event do
             end
         end
       end
+
+      change {Platser.Events.Changes.AuditEventAccessChange,
+              action: :participation_settings_changed}
     end
 
     update :set_bounds do
@@ -236,6 +242,7 @@ defmodule Platser.Events.Event do
     end
 
     has_many :memberships, Platser.Events.Membership
+    has_many :manager_audit_entries, Platser.Events.ManagerAuditEntry
     has_many :pois, Platser.Map.Poi
     has_many :geofences, Platser.Map.Geofence
     has_many :entries, Platser.Activity.Entry

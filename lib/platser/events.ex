@@ -20,5 +20,10 @@ defmodule Platser.Events do
       define :remove_member, action: :remove
       define :update_member_role, action: :update_role
     end
+
+    resource Platser.Events.ManagerAuditEntry do
+      define :list_manager_audit_entries, action: :list_for_event, args: [:event_id]
+      define :create_manager_audit_entry, action: :record
+    end
   end
 end

@@ -38,6 +38,12 @@ The export format is versioned JSON:
   memberships, member events, created POIs, created geofences, authored activity/check-ins,
   and uploaded media metadata.
 
+Manager audit rows introduced by ADR-0042 are included when the subject user is
+the audit actor or target user. The export includes identifiers, closed action
+values, old/new permission values, safe metadata, and timestamps, but does not
+include join-code secrets, email addresses, display names, or raw operator
+support payloads.
+
 Authentication token exports include lifecycle metadata (`purpose`, `created_at`,
 `updated_at`, `expires_at`, `extra_data`) but exclude raw token/JTI/subject values to avoid
 turning a DSAR file into an authentication bearer artifact.

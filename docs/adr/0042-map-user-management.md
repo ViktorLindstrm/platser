@@ -122,6 +122,14 @@ the canonical event record for now: audit rows are retained while the event
 exists. Future retention policy may add compaction or export treatment, but that
 requires a separate ADR amendment.
 
+Implementation note: manager audit rows are stored in a separate
+`manager_audit_entries` table and exposed through `Platser.Events` read actions
+that filter to `view_manager_audit` members. Normal clients cannot create audit
+rows directly; domain action hooks append rows with authorization disabled only
+after the audited transaction commits. DSAR exports include rows where the
+subject user is either actor or target, using only identifiers, closed action
+values, permission/status values, safe metadata, and timestamps.
+
 ### Site-wide Admin and support access
 
 `Accounts.User.superuser` remains a service-operations capability. It grants
