@@ -55,7 +55,7 @@ defmodule Platser.Events.Membership do
     destroy :remove do
       description "Remove a member from an event. Only full managers can remove members, and the last full manager cannot be removed."
       require_atomic? false
-      change Platser.Events.Changes.GuardLastAdmin
+      change Platser.Events.Changes.GuardLastFullManager
       change {Platser.Events.Changes.AuditMembershipAccessChange, action: :member_removed}
     end
 
@@ -63,7 +63,7 @@ defmodule Platser.Events.Membership do
       description "Update a member's role. Only full managers can update roles, and the last full manager cannot be demoted."
       accept [:role]
       require_atomic? false
-      change Platser.Events.Changes.GuardLastAdmin
+      change Platser.Events.Changes.GuardLastFullManager
       change {Platser.Events.Changes.AuditMembershipAccessChange, action: :permission_changed}
     end
   end

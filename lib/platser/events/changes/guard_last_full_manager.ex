@@ -1,4 +1,4 @@
-defmodule Platser.Events.Changes.GuardLastAdmin do
+defmodule Platser.Events.Changes.GuardLastFullManager do
   @full_manager_roles Platser.Events.MapAccess.roles_for_capability(:manage_members)
 
   use Ash.Resource.Change

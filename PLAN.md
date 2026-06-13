@@ -124,6 +124,20 @@
 - Site-wide Admin/superuser status remains separate: a superuser who is not an
   event member is redirected away from the map and does not see map-manager UI.
 
+### Task #102 Final Hardening Notes
+
+- Status: implemented.
+- Re-reviewed AGENTS.md, ADR-0042, and the #95 implementation plan before the
+  final pass.
+- Renamed the last-map-manager Ash change module from legacy admin vocabulary
+  to `GuardLastFullManager` while preserving the existing guard behavior.
+- Tightened the map view so the "Set map area" control is shown only to full
+  map managers, matching the Ash `:set_bounds` policy. Contributor managers
+  still keep map-content powers and setting-independent participation affordances
+  where ADR-0042 grants them.
+- Added a LiveView regression proving contributor managers do not see
+  full-manager map settings/member-management controls.
+
 1. Capability vocabulary and compatibility helpers.
    - Add a small boundary/domain module for membership levels and capability
      checks with Elixir 1.20 `@type` closed unions and `@spec` on every function.

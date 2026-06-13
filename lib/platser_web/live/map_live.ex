@@ -2388,8 +2388,8 @@ defmodule PlatserWeb.MapLive do
         (@poi_step != :idle or @geofence_step != :idle or @selected_map_object) &&
           "opacity-0 pointer-events-none"
       ]}>
-        <%!-- Set map area (manager only) --%>
-        <%= if @is_admin do %>
+        <%!-- Set map area (full map manager only) --%>
+        <%= if @can_manage_members do %>
           <button
             id="set-map-area-btn"
             data-set-map-area="true"
