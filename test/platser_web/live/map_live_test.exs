@@ -5,6 +5,7 @@ defmodule PlatserWeb.MapLiveTest do
   import Phoenix.LiveViewTest
 
   alias Platser.Activity
+  alias Platser.Events
   alias Platser.Map, as: PlatserMap
   alias Platser.Map.Search.Geocoder.Cache
   alias Platser.Media
@@ -41,6 +42,13 @@ defmodule PlatserWeb.MapLiveTest do
       )
 
     signed_in_user
+  end
+
+  defp set_superuser!(user) do
+    {:ok, superuser} =
+      Ash.update(user, %{superuser: true}, action: :set_superuser, authorize?: false)
+
+    superuser
   end
 
   defp sign_in_conn(conn, user) do
@@ -1607,6 +1615,43 @@ defmodule PlatserWeb.MapLiveTest do
       # Render and verify the link contains the correct URL
       rendered_link = render(dashboard_link)
       assert String.contains?(rendered_link, ~p"/events/#{event.id}/dashboard")
+    end
+
+    test "full map managers see compact member management entry point", %{conn: conn} do
+      user = create_user("manager_entry")
+      event = create_event(user)
+      conn = sign_in_conn(conn, user)
+
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      assert has_element?(view, "#map-manager-entry-point")
+      assert has_element?(view, "#map-manager-entry-point", "1 member")
+    end
+
+    test "contributor managers do not see full-manager map settings controls", %{conn: conn} do
+      owner = create_user("map_settings_owner")
+      contributor_manager = create_user("map_settings_contributor_manager")
+      event = create_event(owner)
+
+      {:ok, membership} = Events.join_event(event.join_code, actor: contributor_manager)
+
+      {:ok, _membership} =
+        Events.update_member_role(membership, %{role: :content_manager}, actor: owner)
+
+      conn = sign_in_conn(conn, contributor_manager)
+      {:ok, view, _html} = live(conn, ~p"/events/#{event.id}/map")
+
+      refute has_element?(view, "#map-manager-entry-point")
+      refute has_element?(view, "#set-map-area-btn")
+    end
+
+    test "site-wide admin without event membership does not see map manager UI", %{conn: conn} do
+      owner = create_user("manager_entry_owner")
+      superuser = create_user("service_admin_without_membership") |> set_superuser!()
+      event = create_event(owner)
+      conn = sign_in_conn(conn, superuser)
+
+      assert {:error, {:live_redirect, %{to: "/"}}} = live(conn, ~p"/events/#{event.id}/map")
     end
   end
 

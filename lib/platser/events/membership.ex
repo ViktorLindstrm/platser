@@ -1,4 +1,6 @@
 defmodule Platser.Events.Membership do
+  @manage_members_roles Platser.Events.MapAccess.roles_for_capability(:manage_members)
+
   use Ash.Resource,
     otp_app: :platser,
     domain: Platser.Events,
@@ -23,19 +25,19 @@ defmodule Platser.Events.Membership do
     create :join do
       description "Join an event via its invite join code."
       argument :join_code, :string, allow_nil?: false, sensitive?: true
-      change set_attribute(:role, :member)
+      change set_attribute(:role, :participant)
       change relate_actor(:user)
       change Platser.Events.Changes.SetEventByJoinCode
       change Platser.Events.Changes.BroadcastJoin
     end
 
     create :create_admin do
-      description "Internal: create an admin membership for the event creator. Call with authorize?: false."
+      description "Internal: create a full manager membership for the event creator. Call with authorize?: false."
       accept []
       argument :event_id, :uuid, allow_nil?: false
       argument :user_id, :uuid, allow_nil?: false
 
-      change set_attribute(:role, :admin)
+      change set_attribute(:role, :full_manager)
 
       change fn changeset, _ ->
         changeset
@@ -51,16 +53,18 @@ defmodule Platser.Events.Membership do
     end
 
     destroy :remove do
-      description "Remove a member from an event. Only admins can remove members, and the last admin cannot be removed."
+      description "Remove a member from an event. Only full managers can remove members, and the last full manager cannot be removed."
       require_atomic? false
-      change Platser.Events.Changes.GuardLastAdmin
+      change Platser.Events.Changes.GuardLastFullManager
+      change {Platser.Events.Changes.AuditMembershipAccessChange, action: :member_removed}
     end
 
     update :update_role do
-      description "Update a member's role. Only admins can update roles, and the last admin cannot be demoted."
+      description "Update a member's role. Only full managers can update roles, and the last full manager cannot be demoted."
       accept [:role]
       require_atomic? false
-      change Platser.Events.Changes.GuardLastAdmin
+      change Platser.Events.Changes.GuardLastFullManager
+      change {Platser.Events.Changes.AuditMembershipAccessChange, action: :permission_changed}
     end
   end
 
@@ -68,7 +72,10 @@ defmodule Platser.Events.Membership do
     policy action(:read) do
       authorize_if expr(
                      user_id == ^actor(:id) or
-                       exists(event.memberships, user_id == ^actor(:id) and role == :admin)
+                       exists(
+                         event.memberships,
+                         user_id == ^actor(:id) and role in ^@manage_members_roles
+                       )
                    )
     end
 
@@ -81,11 +88,21 @@ defmodule Platser.Events.Membership do
     end
 
     policy action(:remove) do
-      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
+      authorize_if expr(
+                     exists(
+                       event.memberships,
+                       user_id == ^actor(:id) and role in ^@manage_members_roles
+                     )
+                   )
     end
 
     policy action(:update_role) do
-      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
+      authorize_if expr(
+                     exists(
+                       event.memberships,
+                       user_id == ^actor(:id) and role in ^@manage_members_roles
+                     )
+                   )
     end
   end
 
@@ -94,7 +111,7 @@ defmodule Platser.Events.Membership do
 
     attribute :role, :atom do
       allow_nil? false
-      constraints one_of: [:admin, :member]
+      constraints one_of: Platser.Events.MapAccess.compatible_roles()
     end
 
     create_timestamp :joined_at

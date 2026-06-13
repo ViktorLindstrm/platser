@@ -1,4 +1,6 @@
 defmodule Platser.Activity.Entry do
+  @manage_participation_roles Platser.Events.MapAccess.roles_for_capability(:manage_any_map_item)
+
   use Ash.Resource,
     otp_app: :platser,
     domain: Platser.Activity,
@@ -62,8 +64,38 @@ defmodule Platser.Activity.Entry do
       authorize_if expr(exists(event.memberships, user_id == ^actor(:id)))
     end
 
-    policy action_type(:create) do
-      authorize_if expr(exists(event.memberships, user_id == ^actor(:id)))
+    policy action(:create) do
+      authorize_if expr(
+                     action != :comment_added and
+                       exists(event.memberships, user_id == ^actor(:id))
+                   )
+
+      authorize_if expr(
+                     action == :comment_added and
+                       exists(
+                         event.memberships,
+                         user_id == ^actor(:id) and role in ^@manage_participation_roles
+                       )
+                   )
+
+      authorize_if expr(
+                     action == :comment_added and event.allow_participant_comments == true and
+                       exists(event.memberships, user_id == ^actor(:id))
+                   )
+    end
+
+    policy action(:check_in) do
+      authorize_if expr(
+                     exists(
+                       event.memberships,
+                       user_id == ^actor(:id) and role in ^@manage_participation_roles
+                     )
+                   )
+
+      authorize_if expr(
+                     event.allow_participant_check_ins == true and
+                       exists(event.memberships, user_id == ^actor(:id))
+                   )
     end
   end
 

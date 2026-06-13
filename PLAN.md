@@ -1,3 +1,214 @@
+# Map User Management Plan
+
+## Task #96 ADR and Implementation Plan
+
+- Status: completed.
+- Reviewed AGENTS.md and the role-sensitive ADRs: ADR-0004, ADR-0005, ADR-0011,
+  ADR-0014, ADR-0019, ADR-0024, ADR-0026, ADR-0027, ADR-0030, ADR-0033, plus the
+  current membership, event, map, activity, dashboard, superuser, and tests
+  surfaces.
+- Added ADR-0042 to separate site-wide Admin/superuser capabilities from
+  event-scoped map manager capabilities.
+- Canonical membership roles after migration:
+  `:full_manager`, `:content_manager`, and `:participant`.
+- Backward compatibility:
+  existing `:admin` memberships migrate to `:full_manager`; existing `:member`
+  memberships migrate to `:participant`. Legacy `:admin` never maps to
+  `Accounts.User.superuser`.
+- User-facing labels:
+  site-wide `superuser` is "Admin"; event-scoped `:full_manager` is
+  "Map manager"; `:content_manager` is "Contributor manager"; `:participant` is
+  "Member".
+- Audit policy:
+  permission and membership-management changes are manager-only audit rows, not
+  public `Activity.Entry` rows and not `event:{id}:activity` broadcasts.
+- Operator support policy:
+  no general superuser support access to private map data is accepted. Any future
+  support access requires a new ADR/amendment with narrow scope and audit.
+
+## Staged Implementation Sequence
+
+### Task #97 Migration Implementation Notes
+
+- Status: implemented.
+- Added typed helpers for map-scoped roles/capabilities and participation settings:
+  `Platser.Events.MapAccess` and `Platser.Events.ParticipationSettings`.
+- Migration `20260613143918_migrate_membership_roles_and_participation_settings`
+  backfills legacy memberships:
+  `admin -> full_manager`, `member -> participant`.
+- New membership writes use `:full_manager` for event creators and `:participant`
+  for invite joins. Legacy `:admin` and `:member` remain readable through the
+  compatibility helper while later policy/UI cleanup lands.
+- Added persistent participant settings on `events`:
+  `allow_participant_comments`, `allow_participant_check_ins`, and
+  `allow_participant_live_location`.
+- `allow_public_comments` remains as a write-through compatibility column for
+  existing code and exports. Runtime comment checks now use
+  `allow_participant_comments`.
+- Manager eligibility is registered-user-only: guest memberships cannot be
+  promoted to `:full_manager` or `:content_manager`.
+- Site-wide `superuser` remains separate and still does not grant event reads,
+  private map-item reads, member-management powers, or settings updates.
+
+### Task #98 Capability Policy Implementation Notes
+
+- Status: implemented.
+- Ash policies now derive role sets from `Platser.Events.MapAccess` capability
+  truth tables instead of spelling direct `:admin`/`:member` assumptions in
+  resources.
+- `manage_any_map_item` governs private map-item visibility and POI/geofence/
+  attachment publish, metadata, and delete moderation.
+- `manage_event_settings`, `manage_join_code`, and `manage_members` remain
+  full-manager-only and do not include `content_manager` or site-wide
+  `superuser`.
+- UI role checks that needed compatibility now use `MapAccess` normalization,
+  keeping UI checks secondary to Ash action authorization.
+- StreamData coverage verifies capability role-list derivation, full-manager
+  boundaries for settings/member actions, content-manager map-item moderation,
+  participant denial for others' private items, and site Admin separation.
+
+### Task #99 Manager Audit Implementation Notes
+
+- Status: implemented.
+- Added `Platser.Events.ManagerAuditEntry` and migration
+  `20260613154403_create_manager_audit_entries` for append-only manager audit
+  rows.
+- Audited transitions are membership removal, permission changes, join-code
+  regeneration/invalidation, and participation setting changes.
+- Audit writes run from Ash domain action hooks after successful transactions,
+  not from LiveView handlers, and do not create or broadcast public
+  `Activity.Entry` rows.
+- Audit visibility is limited to full map managers through the
+  `view_manager_audit` capability; site-wide `superuser` alone sees no audit
+  rows.
+- DSAR export includes manager audit rows where the subject is actor or target,
+  with identifiers, closed action values, safe metadata, and no join-code
+  secrets or user-facing PII.
+
+### Task #100 Restricted Participation Enforcement Notes
+
+- Status: implemented.
+- `Activity.Entry` policies now enforce `allow_participant_comments` for
+  `:comment_added` entries and `allow_participant_check_ins` for `:checked_in`
+  entries.
+- Full and content map managers remain able to comment and check in regardless
+  of participant settings; regular members and guests follow the event setting.
+- `MapLive` comment controls use the same manager-or-setting rule as the submit
+  path, so disabled member comments hide the form and do not create activity
+  entries.
+- `MapLive` check-in and live-location handlers reject disabled member actions
+  with clear flash feedback before creating `Activity.Entry` rows or updating
+  Phoenix Presence.
+- Live-location remains Presence-only and is stopped for a member if updated
+  settings disable sharing mid-session.
+- Site-wide `superuser` remains separate and does not bypass participation
+  policies without event membership and map-scoped authorization.
+
+### Task #101 Dashboard Member Management UI Notes
+
+- Status: implemented.
+- The event dashboard is the authoritative map member-management surface.
+  Member rows use LiveView streams and stable DOM IDs for access badges,
+  account status, join state, contribution status, participation status, and
+  each management control.
+- Dashboard copy uses map-scoped vocabulary only: Map manager, Contributor
+  manager, Member, Guest, Registered, and Restricted viewer for participants
+  limited by event participation settings.
+- Full map managers can promote registered members to map manager or contributor
+  manager, demote managers to member, and remove members where the last-map-
+  manager guard allows it. Guest manager promotions render as disabled controls;
+  Ash authorization remains the enforcement boundary.
+- The map view only shows a compact full-map-manager entry point to the
+  dashboard with the member count. Content managers keep map-content powers, but
+  do not get member-management entry UI.
+- Site-wide Admin/superuser status remains separate: a superuser who is not an
+  event member is redirected away from the map and does not see map-manager UI.
+
+### Task #102 Final Hardening Notes
+
+- Status: implemented.
+- Re-reviewed AGENTS.md, ADR-0042, and the #95 implementation plan before the
+  final pass.
+- Renamed the last-map-manager Ash change module from legacy admin vocabulary
+  to `GuardLastFullManager` while preserving the existing guard behavior.
+- Tightened the map view so the "Set map area" control is shown only to full
+  map managers, matching the Ash `:set_bounds` policy. Contributor managers
+  still keep map-content powers and setting-independent participation affordances
+  where ADR-0042 grants them.
+- Added a LiveView regression proving contributor managers do not see
+  full-manager map settings/member-management controls.
+
+1. Capability vocabulary and compatibility helpers.
+   - Add a small boundary/domain module for membership levels and capability
+     checks with Elixir 1.20 `@type` closed unions and `@spec` on every function.
+   - Support both legacy `:admin`/`:member` and target
+     `:full_manager`/`:content_manager`/`:participant` while the migration is
+     underway.
+   - Add StreamData coverage for capability monotonicity, last-manager guard
+     inputs, and legacy role normalization.
+
+2. Membership migration.
+   - Generate the migration with `mix ecto.gen.migration`.
+   - Backfill `memberships.role`: `admin -> full_manager`, `member -> participant`.
+   - Update `Platser.Events.Membership` constraints and code interfaces so new
+     writes use only target role names.
+   - Keep reads tolerant of legacy atoms until fixtures and historical data are
+     fully migrated.
+
+3. Ash policy updates.
+   - Replace raw `role == :admin` checks in Event, Membership, POI, Geofence,
+     Media.Attachment, search, and boundary helpers with capability predicates.
+   - Ensure private item visibility is:
+     full manager: any item; content manager: any item; participant: own private
+     items only.
+   - Ensure member/settings/join-code/permission actions require
+     `manage_members`, `manage_event_settings`, `manage_join_code`, or
+     `manage_permissions`, all full-manager-only.
+   - Add tests proving superuser alone does not grant event membership, private
+     map-data visibility, member-list visibility, or map-manager powers.
+
+4. Manager audit surface.
+   - Add a manager-only audit resource for membership removals, permission
+     changes, join-code changes, and participation setting changes.
+   - Do not use `Activity.Entry` for these manager-only events.
+   - Retain audit rows with the event record until a future retention ADR says
+     otherwise.
+   - Add StreamData tests for audit visibility, append-only behavior, and absence
+     from the public activity feed.
+
+5. Dashboard and map UI copy.
+   - Rename event-scoped "Admin" labels and actions to "Map manager".
+   - Rename "Public comments" copy to member/comment participation wording.
+   - Keep DOM IDs stable unless a test explicitly changes with the UI.
+   - Verify dashboard member management and map inspection behavior with
+     LiveView tests and browser checks where UI behavior changes.
+
+6. Restricted participation settings.
+   - Preserve the existing `allow_public_comments` behavior initially, but expose
+     it as member comment participation.
+   - Add any new settings only with Ash policy enforcement and LiveView tests.
+   - Defer advanced settings until the role migration and manager audit surface
+     are stable.
+
+7. Hardening and quality gate.
+   - Re-review ADR-0042 against the implementation and amend it before broad
+     rollout if policy behavior changes.
+   - Run focused domain, policy, and LiveView tests after each stage.
+   - Run `mix compile --warnings-as-errors`.
+   - Run `mix precommit` at the final hardening subtask.
+
+## Acceptance Criteria
+
+- No user-facing event-scoped surface calls a map manager "Admin".
+- Existing legacy event admins keep equivalent map-manager powers after
+  migration.
+- Site-wide Admin/superuser status does not imply event membership, private
+  event data visibility, member-management access, or map-manager powers.
+- Permission and membership-management changes are visible only on the
+  manager-only audit surface and never in the public activity feed.
+- StreamData property tests cover pure/domain capability logic and web/LiveView
+  outcomes for generated role and event-membership combinations.
+
 # Map Search Improvements Plan
 
 ## Task #94 Review and Hardening

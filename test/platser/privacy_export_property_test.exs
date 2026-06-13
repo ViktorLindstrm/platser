@@ -4,6 +4,7 @@ defmodule Platser.PrivacyExportPropertyTest do
 
   alias Platser.Accounts.User
   alias Platser.Activity
+  alias Platser.Events
   alias Platser.Events.Event
   alias Platser.Map, as: PlatserMap
   alias Platser.Media
@@ -50,6 +51,12 @@ defmodule Platser.PrivacyExportPropertyTest do
         create_check_in(user, event, index)
       end
 
+      audit_target = create_user("audit_target")
+      {:ok, audit_target_membership} = Events.join_event(event.join_code, actor: audit_target)
+
+      {:ok, _updated} =
+        Events.update_member_role(audit_target_membership, %{role: :content_manager}, actor: user)
+
       other_user = create_user("other")
       other_event = create_event(other_user, "Other Event")
       other_poi = create_poi(other_user, other_event, 99)
@@ -66,6 +73,7 @@ defmodule Platser.PrivacyExportPropertyTest do
       assert length(payload.data.created_geofences) == length(geofences)
       assert length(payload.data.media_attachments) == length(pois)
       assert length(payload.data.activity_entries) >= check_in_count
+      assert length(payload.data.manager_audit_entries) == 1
 
       exported_ids = exported_ids(payload)
 
@@ -75,8 +83,10 @@ defmodule Platser.PrivacyExportPropertyTest do
 
       assert Enum.any?(payload.inventory, &(&1.section == :created_pois))
       assert Enum.any?(payload.inventory, &(&1.section == :auth_tokens))
+      assert Enum.any?(payload.inventory, &(&1.section == :manager_audit_entries))
       assert Enum.all?(payload.data.created_pois, &(&1.creator_id == user.id))
       assert Enum.all?(payload.data.media_attachments, &(&1.uploader_id == user.id))
+      assert Enum.all?(payload.data.manager_audit_entries, &(&1.actor_id == user.id))
     end
   end
 

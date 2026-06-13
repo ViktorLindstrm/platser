@@ -1,4 +1,6 @@
 defmodule Platser.Map.Poi do
+  @manage_any_map_item_roles Platser.Events.MapAccess.roles_for_capability(:manage_any_map_item)
+
   use Ash.Resource,
     otp_app: :platser,
     domain: Platser.Map,
@@ -73,7 +75,11 @@ defmodule Platser.Map.Poi do
       authorize_if expr(
                      exists(event.memberships, user_id == ^actor(:id)) and
                        (visibility == :public or creator_id == ^actor(:id) or
-                          exists(event.memberships, user_id == ^actor(:id) and role == :admin))
+                          exists(
+                            event.memberships,
+                            user_id == ^actor(:id) and
+                              role in ^@manage_any_map_item_roles
+                          ))
                    )
     end
 
@@ -83,32 +89,67 @@ defmodule Platser.Map.Poi do
 
     policy action(:update) do
       authorize_if expr(creator_id == ^actor(:id))
-      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
+
+      authorize_if expr(
+                     exists(
+                       event.memberships,
+                       user_id == ^actor(:id) and
+                         role in ^@manage_any_map_item_roles
+                     )
+                   )
     end
 
     policy action(:update_metadata) do
       authorize_if expr(creator_id == ^actor(:id))
-      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
+
+      authorize_if expr(
+                     exists(
+                       event.memberships,
+                       user_id == ^actor(:id) and
+                         role in ^@manage_any_map_item_roles
+                     )
+                   )
     end
 
     policy action(:update_comment) do
       authorize_if expr(creator_id == ^actor(:id))
-      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
 
       authorize_if expr(
-                     event.allow_public_comments == true and
+                     exists(
+                       event.memberships,
+                       user_id == ^actor(:id) and
+                         role in ^@manage_any_map_item_roles
+                     )
+                   )
+
+      authorize_if expr(
+                     event.allow_participant_comments == true and
                        exists(event.memberships, user_id == ^actor(:id))
                    )
     end
 
     policy action(:publish) do
       authorize_if expr(creator_id == ^actor(:id))
-      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
+
+      authorize_if expr(
+                     exists(
+                       event.memberships,
+                       user_id == ^actor(:id) and
+                         role in ^@manage_any_map_item_roles
+                     )
+                   )
     end
 
     policy action_type(:destroy) do
       authorize_if expr(creator_id == ^actor(:id))
-      authorize_if expr(exists(event.memberships, user_id == ^actor(:id) and role == :admin))
+
+      authorize_if expr(
+                     exists(
+                       event.memberships,
+                       user_id == ^actor(:id) and
+                         role in ^@manage_any_map_item_roles
+                     )
+                   )
     end
   end
 
