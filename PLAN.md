@@ -1,3 +1,104 @@
+# Map User Management Plan
+
+## Task #96 ADR and Implementation Plan
+
+- Status: completed.
+- Reviewed AGENTS.md and the role-sensitive ADRs: ADR-0004, ADR-0005, ADR-0011,
+  ADR-0014, ADR-0019, ADR-0024, ADR-0026, ADR-0027, ADR-0030, ADR-0033, plus the
+  current membership, event, map, activity, dashboard, superuser, and tests
+  surfaces.
+- Added ADR-0042 to separate site-wide Admin/superuser capabilities from
+  event-scoped map manager capabilities.
+- Canonical membership roles after migration:
+  `:full_manager`, `:content_manager`, and `:participant`.
+- Backward compatibility:
+  existing `:admin` memberships migrate to `:full_manager`; existing `:member`
+  memberships migrate to `:participant`. Legacy `:admin` never maps to
+  `Accounts.User.superuser`.
+- User-facing labels:
+  site-wide `superuser` is "Admin"; event-scoped `:full_manager` is
+  "Map manager"; `:content_manager` is "Contributor manager"; `:participant` is
+  "Member".
+- Audit policy:
+  permission and membership-management changes are manager-only audit rows, not
+  public `Activity.Entry` rows and not `event:{id}:activity` broadcasts.
+- Operator support policy:
+  no general superuser support access to private map data is accepted. Any future
+  support access requires a new ADR/amendment with narrow scope and audit.
+
+## Staged Implementation Sequence
+
+1. Capability vocabulary and compatibility helpers.
+   - Add a small boundary/domain module for membership levels and capability
+     checks with Elixir 1.20 `@type` closed unions and `@spec` on every function.
+   - Support both legacy `:admin`/`:member` and target
+     `:full_manager`/`:content_manager`/`:participant` while the migration is
+     underway.
+   - Add StreamData coverage for capability monotonicity, last-manager guard
+     inputs, and legacy role normalization.
+
+2. Membership migration.
+   - Generate the migration with `mix ecto.gen.migration`.
+   - Backfill `memberships.role`: `admin -> full_manager`, `member -> participant`.
+   - Update `Platser.Events.Membership` constraints and code interfaces so new
+     writes use only target role names.
+   - Keep reads tolerant of legacy atoms until fixtures and historical data are
+     fully migrated.
+
+3. Ash policy updates.
+   - Replace raw `role == :admin` checks in Event, Membership, POI, Geofence,
+     Media.Attachment, search, and boundary helpers with capability predicates.
+   - Ensure private item visibility is:
+     full manager: any item; content manager: any item; participant: own private
+     items only.
+   - Ensure member/settings/join-code/permission actions require
+     `manage_members`, `manage_event_settings`, `manage_join_code`, or
+     `manage_permissions`, all full-manager-only.
+   - Add tests proving superuser alone does not grant event membership, private
+     map-data visibility, member-list visibility, or map-manager powers.
+
+4. Manager audit surface.
+   - Add a manager-only audit resource for membership removals, permission
+     changes, join-code changes, and participation setting changes.
+   - Do not use `Activity.Entry` for these manager-only events.
+   - Retain audit rows with the event record until a future retention ADR says
+     otherwise.
+   - Add StreamData tests for audit visibility, append-only behavior, and absence
+     from the public activity feed.
+
+5. Dashboard and map UI copy.
+   - Rename event-scoped "Admin" labels and actions to "Map manager".
+   - Rename "Public comments" copy to member/comment participation wording.
+   - Keep DOM IDs stable unless a test explicitly changes with the UI.
+   - Verify dashboard member management and map inspection behavior with
+     LiveView tests and browser checks where UI behavior changes.
+
+6. Restricted participation settings.
+   - Preserve the existing `allow_public_comments` behavior initially, but expose
+     it as member comment participation.
+   - Add any new settings only with Ash policy enforcement and LiveView tests.
+   - Defer advanced settings until the role migration and manager audit surface
+     are stable.
+
+7. Hardening and quality gate.
+   - Re-review ADR-0042 against the implementation and amend it before broad
+     rollout if policy behavior changes.
+   - Run focused domain, policy, and LiveView tests after each stage.
+   - Run `mix compile --warnings-as-errors`.
+   - Run `mix precommit` at the final hardening subtask.
+
+## Acceptance Criteria
+
+- No user-facing event-scoped surface calls a map manager "Admin".
+- Existing legacy event admins keep equivalent map-manager powers after
+  migration.
+- Site-wide Admin/superuser status does not imply event membership, private
+  event data visibility, member-management access, or map-manager powers.
+- Permission and membership-management changes are visible only on the
+  manager-only audit surface and never in the public activity feed.
+- StreamData property tests cover pure/domain capability logic and web/LiveView
+  outcomes for generated role and event-membership combinations.
+
 # Map Search Improvements Plan
 
 ## Task #94 Review and Hardening
