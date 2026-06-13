@@ -85,6 +85,25 @@
   with identifiers, closed action values, safe metadata, and no join-code
   secrets or user-facing PII.
 
+### Task #100 Restricted Participation Enforcement Notes
+
+- Status: implemented.
+- `Activity.Entry` policies now enforce `allow_participant_comments` for
+  `:comment_added` entries and `allow_participant_check_ins` for `:checked_in`
+  entries.
+- Full and content map managers remain able to comment and check in regardless
+  of participant settings; regular members and guests follow the event setting.
+- `MapLive` comment controls use the same manager-or-setting rule as the submit
+  path, so disabled member comments hide the form and do not create activity
+  entries.
+- `MapLive` check-in and live-location handlers reject disabled member actions
+  with clear flash feedback before creating `Activity.Entry` rows or updating
+  Phoenix Presence.
+- Live-location remains Presence-only and is stopped for a member if updated
+  settings disable sharing mid-session.
+- Site-wide `superuser` remains separate and does not bypass participation
+  policies without event membership and map-scoped authorization.
+
 1. Capability vocabulary and compatibility helpers.
    - Add a small boundary/domain module for membership levels and capability
      checks with Elixir 1.20 `@type` closed unions and `@spec` on every function.

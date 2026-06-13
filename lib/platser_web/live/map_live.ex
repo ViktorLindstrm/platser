@@ -199,7 +199,17 @@ defmodule PlatserWeb.MapLive do
   end
 
   def handle_info({:event_settings_updated, updated_event}, socket) do
-    {:noreply, assign(socket, :event, updated_event)}
+    socket = assign(socket, :event, updated_event)
+
+    socket =
+      if socket.assigns.sharing? and not live_location_allowed?(socket) do
+        stop_location_sharing(socket)
+        |> put_flash(:error, "Live location sharing is disabled for members right now.")
+      else
+        socket
+      end
+
+    {:noreply, socket}
   end
 
   def handle_info({:poi_added, poi}, socket) do
@@ -501,59 +511,25 @@ defmodule PlatserWeb.MapLive do
 
   def handle_event("toggle_sharing", _params, socket) do
     if socket.assigns.sharing? do
-      event_id = socket.assigns.event.id
-      topic = EventPresence.topic(event_id)
-      EventPresence.untrack(self(), topic, socket.assigns.current_user.id)
-
-      {:noreply,
-       socket
-       |> assign(:sharing?, false)
-       |> assign(:location_tracked?, false)
-       |> assign(:in_event_boundary?, false)
-       |> push_event("stop_sharing", %{})}
+      {:noreply, stop_location_sharing(socket)}
     else
-      {:noreply,
-       socket
-       |> assign(:sharing?, true)
-       |> push_event("start_sharing", %{})}
+      if live_location_allowed?(socket) do
+        {:noreply,
+         socket
+         |> assign(:sharing?, true)
+         |> push_event("start_sharing", %{})}
+      else
+        {:noreply,
+         put_flash(socket, :error, "Live location sharing is disabled for members right now.")}
+      end
     end
   end
 
   def handle_event("check_in", %{"lat" => lat, "lng" => lng}, socket) do
-    actor = socket.assigns.current_user
-    event = socket.assigns.event
-    actor_name = actor.display_name || "Someone"
-    message = "#{actor_name} checked in"
-
-    case Activity.create_check_in(
-           %{
-             event_id: event.id,
-             lat: ensure_float(lat),
-             lng: ensure_float(lng),
-             message: message
-           },
-           actor: actor
-         ) do
-      {:ok, entry} ->
-        Phoenix.PubSub.broadcast(
-          Platser.PubSub,
-          "event:#{event.id}:activity",
-          {:entry_added, entry}
-        )
-
-        {:noreply, push_event(socket, "check_in_added", check_in_marker_payload(entry))}
-
-      {:error, %Ash.Error.Invalid{} = err} ->
-        message =
-          case format_ash_errors(err) do
-            [{_field, error_message} | _] -> error_message
-            _ -> "Could not record check-in."
-          end
-
-        {:noreply, put_flash(socket, :error, message)}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "Could not record check-in.")}
+    if check_ins_allowed?(socket) do
+      create_check_in(lat, lng, socket)
+    else
+      {:noreply, put_flash(socket, :error, "Check-ins are disabled for members right now.")}
     end
   end
 
@@ -570,7 +546,7 @@ defmodule PlatserWeb.MapLive do
         %{"lat" => lat, "lng" => lng} = params,
         socket
       ) do
-    if socket.assigns.sharing? do
+    if socket.assigns.sharing? and live_location_allowed?(socket) do
       event_id = socket.assigns.event.id
       user = socket.assigns.current_user
       already_tracked? = socket.assigns.location_tracked?
@@ -593,6 +569,14 @@ defmodule PlatserWeb.MapLive do
           {:noreply, socket}
       end
     else
+      socket =
+        if socket.assigns.sharing? do
+          stop_location_sharing(socket)
+          |> put_flash(:error, "Live location sharing is disabled for members right now.")
+        else
+          socket
+        end
+
       {:noreply, socket}
     end
   end
@@ -805,7 +789,7 @@ defmodule PlatserWeb.MapLive do
     case socket.assigns.selected_map_object do
       %{kind: :poi, item: %Poi{} = poi} ->
         if can_comment_on_selected_map_object?(
-             socket.assigns.selected_map_object_can_manage,
+             socket.assigns.is_admin,
              socket.assigns.event.allow_participant_comments
            ) and comment != "" do
           case create_map_comment_entry(:poi, poi, comment, actor) do
@@ -822,7 +806,7 @@ defmodule PlatserWeb.MapLive do
 
       %{kind: :geofence, item: %Geofence{} = geofence} ->
         if can_comment_on_selected_map_object?(
-             socket.assigns.selected_map_object_can_manage,
+             socket.assigns.is_admin,
              socket.assigns.event.allow_participant_comments
            ) and comment != "" do
           case create_map_comment_entry(:geofence, geofence, comment, actor) do
@@ -1752,6 +1736,69 @@ defmodule PlatserWeb.MapLive do
 
       {:error, _} ->
         false
+    end
+  end
+
+  @spec check_ins_allowed?(Phoenix.LiveView.Socket.t()) :: boolean()
+  defp check_ins_allowed?(socket) do
+    socket.assigns.is_admin or socket.assigns.event.allow_participant_check_ins
+  end
+
+  @spec live_location_allowed?(Phoenix.LiveView.Socket.t()) :: boolean()
+  defp live_location_allowed?(socket) do
+    socket.assigns.is_admin or socket.assigns.event.allow_participant_live_location
+  end
+
+  @spec stop_location_sharing(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  defp stop_location_sharing(socket) do
+    event_id = socket.assigns.event.id
+    topic = EventPresence.topic(event_id)
+    EventPresence.untrack(self(), topic, socket.assigns.current_user.id)
+
+    socket
+    |> assign(:sharing?, false)
+    |> assign(:location_tracked?, false)
+    |> assign(:in_event_boundary?, false)
+    |> push_event("stop_sharing", %{})
+  end
+
+  @spec create_check_in(term(), term(), Phoenix.LiveView.Socket.t()) ::
+          {:noreply, Phoenix.LiveView.Socket.t()}
+  defp create_check_in(lat, lng, socket) do
+    actor = socket.assigns.current_user
+    event = socket.assigns.event
+    actor_name = actor.display_name || "Someone"
+    message = "#{actor_name} checked in"
+
+    case Activity.create_check_in(
+           %{
+             event_id: event.id,
+             lat: ensure_float(lat),
+             lng: ensure_float(lng),
+             message: message
+           },
+           actor: actor
+         ) do
+      {:ok, entry} ->
+        Phoenix.PubSub.broadcast(
+          Platser.PubSub,
+          "event:#{event.id}:activity",
+          {:entry_added, entry}
+        )
+
+        {:noreply, push_event(socket, "check_in_added", check_in_marker_payload(entry))}
+
+      {:error, %Ash.Error.Invalid{} = err} ->
+        message =
+          case format_ash_errors(err) do
+            [{_field, error_message} | _] -> error_message
+            _ -> "Could not record check-in."
+          end
+
+        {:noreply, put_flash(socket, :error, message)}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Could not record check-in.")}
     end
   end
 
@@ -3042,7 +3089,7 @@ defmodule PlatserWeb.MapLive do
                   </div>
                 </div>
                 <%= if can_comment_on_selected_map_object?(
-                       @selected_map_object_can_manage,
+                       @is_admin,
                        @event.allow_participant_comments
                      ) do %>
                   <div class="px-4 py-3 border-b border-gray-100">
