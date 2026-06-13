@@ -5,7 +5,9 @@ defmodule PlatserWeb.Events.DashboardLive do
 
   alias Platser.Events
   alias Platser.Events.Event
+  alias Platser.Events.MapAccess
   alias Platser.Events.Membership
+  alias Platser.Events.ParticipationSettings
   alias Platser.Map, as: PlatserMap
   alias Platser.Map.Geofence
   alias Platser.Map.Poi
@@ -19,7 +21,7 @@ defmodule PlatserWeb.Events.DashboardLive do
         memberships = load_memberships(event_id, actor)
         pois = load_pois(event_id, actor)
         geofences = load_geofences(event_id, actor)
-        is_admin = admin?(memberships, actor.id)
+        is_admin = full_manager?(memberships, actor.id)
 
         if connected?(socket) do
           Phoenix.PubSub.subscribe(Platser.PubSub, "event:#{event.id}:settings")
@@ -137,24 +139,77 @@ defmodule PlatserWeb.Events.DashboardLive do
   end
 
   def handle_event("update_settings", %{"allow_public_comments" => val}, socket) do
+    handle_event("update_settings", %{"allow_participant_comments" => val}, socket)
+  end
+
+  def handle_event("update_settings", %{"allow_participant_comments" => val}, socket) do
     actor = socket.assigns.current_user
     event = socket.assigns.event
-    allow = val == "true"
 
-    case Events.update_event_settings(event, %{allow_public_comments: allow}, actor: actor) do
-      {:ok, updated_event} ->
-        Phoenix.PubSub.broadcast(
-          Platser.PubSub,
-          "event:#{event.id}:settings",
-          {:event_settings_updated, updated_event}
-        )
+    with {:ok, allow} <- ParticipationSettings.parse_boolean(val),
+         {:ok, updated_event} <-
+           Events.update_event_settings(event, %{allow_participant_comments: allow}, actor: actor) do
+      Phoenix.PubSub.broadcast(
+        Platser.PubSub,
+        "event:#{event.id}:settings",
+        {:event_settings_updated, updated_event}
+      )
 
-        {:noreply,
-         socket
-         |> assign(:event, updated_event)
-         |> put_flash(:info, "Settings saved.")}
+      {:noreply,
+       socket
+       |> assign(:event, updated_event)
+       |> put_flash(:info, "Settings saved.")}
+    else
+      :error ->
+        {:noreply, put_flash(socket, :error, "Could not save settings.")}
 
       {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Could not save settings.")}
+    end
+  end
+
+  def handle_event("update_settings", params, socket) do
+    actor = socket.assigns.current_user
+    event = socket.assigns.event
+
+    setting_attrs =
+      params
+      |> Enum.reduce_while({:ok, %{}}, fn {key, value}, {:ok, attrs} ->
+        with {:ok, setting} <- ParticipationSettings.parse_setting(key),
+             {:ok, allow?} <- ParticipationSettings.parse_boolean(value) do
+          attr =
+            case setting do
+              :comments -> :allow_participant_comments
+              :check_ins -> :allow_participant_check_ins
+              :live_location -> :allow_participant_live_location
+            end
+
+          {:cont, {:ok, Map.put(attrs, attr, allow?)}}
+        else
+          :error -> {:halt, :error}
+        end
+      end)
+
+    case setting_attrs do
+      {:ok, attrs} when map_size(attrs) > 0 ->
+        case Events.update_event_settings(event, attrs, actor: actor) do
+          {:ok, updated_event} ->
+            Phoenix.PubSub.broadcast(
+              Platser.PubSub,
+              "event:#{event.id}:settings",
+              {:event_settings_updated, updated_event}
+            )
+
+            {:noreply,
+             socket
+             |> assign(:event, updated_event)
+             |> put_flash(:info, "Settings saved.")}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not save settings.")}
+        end
+
+      _ ->
         {:noreply, put_flash(socket, :error, "Could not save settings.")}
     end
   end
@@ -240,29 +295,43 @@ defmodule PlatserWeb.Events.DashboardLive do
 
     case Ash.get(Membership, membership_id, actor: actor) do
       {:ok, membership} ->
-        new_role_atom = String.to_atom(new_role)
+        case MapAccess.parse_role(new_role) do
+          {:ok, role} ->
+            update_member_role(socket, membership, role, actor)
 
-        case Events.update_member_role(membership, %{role: new_role_atom}, actor: actor) do
-          {:ok, updated_membership} ->
-            {:noreply,
-             socket
-             |> stream_insert(:memberships, updated_membership)
-             |> put_flash(:info, "Member role updated.")}
-
-          {:error, %Ash.Error.Forbidden{}} ->
-            {:noreply,
-             put_flash(socket, :error, "You do not have permission to update member roles.")}
-
-          {:error, %Ash.Error.Invalid{} = err} ->
-            message = format_error(err)
-            {:noreply, put_flash(socket, :error, message)}
-
-          {:error, _} ->
+          :error ->
             {:noreply, put_flash(socket, :error, "Could not update member role.")}
         end
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "Member not found.")}
+    end
+  end
+
+  @spec update_member_role(
+          Phoenix.LiveView.Socket.t(),
+          Membership.t(),
+          MapAccess.role(),
+          Platser.Accounts.User.t()
+        ) :: {:noreply, Phoenix.LiveView.Socket.t()}
+  defp update_member_role(socket, membership, role, actor) do
+    case Events.update_member_role(membership, %{role: role}, actor: actor) do
+      {:ok, updated_membership} ->
+        {:noreply,
+         socket
+         |> stream_insert(:memberships, updated_membership)
+         |> put_flash(:info, "Member role updated.")}
+
+      {:error, %Ash.Error.Forbidden{}} ->
+        {:noreply,
+         put_flash(socket, :error, "You do not have permission to update member roles.")}
+
+      {:error, %Ash.Error.Invalid{} = err} ->
+        message = format_error(err)
+        {:noreply, put_flash(socket, :error, message)}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Could not update member role.")}
     end
   end
 
@@ -457,7 +526,7 @@ defmodule PlatserWeb.Events.DashboardLive do
           </dl>
         </section>
 
-        <%!-- Event settings (admin only) --%>
+        <%!-- Event settings (map manager only) --%>
         <%= if @is_admin do %>
           <section
             id="event-settings-section"
@@ -468,28 +537,79 @@ defmodule PlatserWeb.Events.DashboardLive do
             </h2>
             <div class="flex items-center justify-between gap-4">
               <div>
-                <p class="text-sm font-medium text-base-content">Public comments</p>
+                <p class="text-sm font-medium text-base-content">Member comments</p>
                 <p class="text-xs text-base-content/50 mt-0.5">
                   Allow all event members to write comments on map items.
                 </p>
               </div>
               <button
-                id="toggle-public-comments-btn"
+                id="toggle-member-comments-btn"
                 phx-click="update_settings"
-                phx-value-allow_public_comments={to_string(!@event.allow_public_comments)}
+                phx-value-allow_participant_comments={to_string(!@event.allow_participant_comments)}
                 class={[
                   "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none",
-                  if(@event.allow_public_comments,
+                  if(@event.allow_participant_comments,
                     do: "bg-primary",
                     else: "bg-base-300"
                   )
                 ]}
                 role="switch"
-                aria-checked={to_string(@event.allow_public_comments)}
+                aria-checked={to_string(@event.allow_participant_comments)}
               >
                 <span class={[
                   "pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition duration-200 ease-in-out",
-                  if(@event.allow_public_comments, do: "translate-x-5", else: "translate-x-0")
+                  if(@event.allow_participant_comments, do: "translate-x-5", else: "translate-x-0")
+                ]} />
+              </button>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium text-base-content">Member check-ins</p>
+                <p class="text-xs text-base-content/50 mt-0.5">
+                  Allow event members to create one-off location check-ins.
+                </p>
+              </div>
+              <button
+                id="toggle-member-check-ins-btn"
+                phx-click="update_settings"
+                phx-value-check_ins={to_string(!@event.allow_participant_check_ins)}
+                class={[
+                  "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none",
+                  if(@event.allow_participant_check_ins, do: "bg-primary", else: "bg-base-300")
+                ]}
+                role="switch"
+                aria-checked={to_string(@event.allow_participant_check_ins)}
+              >
+                <span class={[
+                  "pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition duration-200 ease-in-out",
+                  if(@event.allow_participant_check_ins, do: "translate-x-5", else: "translate-x-0")
+                ]} />
+              </button>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium text-base-content">Member live location</p>
+                <p class="text-xs text-base-content/50 mt-0.5">
+                  Allow event members to share live location while viewing the map.
+                </p>
+              </div>
+              <button
+                id="toggle-member-live-location-btn"
+                phx-click="update_settings"
+                phx-value-live_location={to_string(!@event.allow_participant_live_location)}
+                class={[
+                  "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none",
+                  if(@event.allow_participant_live_location, do: "bg-primary", else: "bg-base-300")
+                ]}
+                role="switch"
+                aria-checked={to_string(@event.allow_participant_live_location)}
+              >
+                <span class={[
+                  "pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition duration-200 ease-in-out",
+                  if(@event.allow_participant_live_location,
+                    do: "translate-x-5",
+                    else: "translate-x-0"
+                  )
                 ]} />
               </button>
             </div>
@@ -526,23 +646,23 @@ defmodule PlatserWeb.Events.DashboardLive do
               </div>
               <span class={[
                 "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold shrink-0",
-                if(membership.role == :admin,
+                if(MapAccess.manager_role?(membership.role),
                   do: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
                   else: "bg-base-200 text-base-content/60"
                 )
               ]}>
-                {if membership.role == :admin, do: "Admin", else: "Member"}
+                {MapAccess.label(membership.role)}
               </span>
               <%= if @is_admin do %>
                 <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <%= if membership.role == :admin do %>
+                  <%= if MapAccess.full_manager?(membership.role) do %>
                     <button
                       phx-click="update_member_role"
                       phx-value-id={membership.id}
-                      phx-value-role="member"
+                      phx-value-role="participant"
                       title="Demote to Member"
                       class="p-1.5 rounded-lg hover:bg-base-200 text-base-content/60 hover:text-base-content transition-colors"
-                      data-confirm="Demote this member to regular member?"
+                      data-confirm="Demote this map manager to member?"
                     >
                       <.icon name="hero-arrow-down" class="w-4 h-4" />
                     </button>
@@ -550,11 +670,22 @@ defmodule PlatserWeb.Events.DashboardLive do
                     <button
                       phx-click="update_member_role"
                       phx-value-id={membership.id}
-                      phx-value-role="admin"
-                      title="Promote to Admin"
+                      phx-value-role="full_manager"
+                      title="Promote to Map manager"
                       class="p-1.5 rounded-lg hover:bg-base-200 text-base-content/60 hover:text-base-content transition-colors"
                     >
                       <.icon name="hero-arrow-up" class="w-4 h-4" />
+                    </button>
+                  <% end %>
+                  <%= if membership.role == :participant or membership.role == :member do %>
+                    <button
+                      phx-click="update_member_role"
+                      phx-value-id={membership.id}
+                      phx-value-role="content_manager"
+                      title="Promote to Contributor manager"
+                      class="p-1.5 rounded-lg hover:bg-base-200 text-base-content/60 hover:text-base-content transition-colors"
+                    >
+                      <.icon name="hero-pencil-square" class="w-4 h-4" />
                     </button>
                   <% end %>
                   <button
@@ -753,9 +884,9 @@ defmodule PlatserWeb.Events.DashboardLive do
     end
   end
 
-  @spec admin?([Membership.t()], Ecto.UUID.t()) :: boolean()
-  defp admin?(memberships, user_id) do
-    Enum.any?(memberships, &(&1.user_id == user_id and &1.role == :admin))
+  @spec full_manager?([Membership.t()], Ecto.UUID.t()) :: boolean()
+  defp full_manager?(memberships, user_id) do
+    Enum.any?(memberships, &(&1.user_id == user_id and MapAccess.full_manager?(&1.role)))
   end
 
   @spec active_join_code?(Event.t()) :: boolean()

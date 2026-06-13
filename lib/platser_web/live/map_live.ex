@@ -5,6 +5,7 @@ defmodule PlatserWeb.MapLive do
   alias Platser.Activity.Entry
   alias Platser.EventPresence
   alias Platser.Events.Event
+  alias Platser.Events.MapAccess
   alias Platser.Location
   alias Platser.Map, as: PlatserMap
   alias Platser.Map.Geofence
@@ -79,7 +80,7 @@ defmodule PlatserWeb.MapLive do
       case load_event(event_id, actor) do
         {:ok, event} ->
           {pois, geofences, entries, check_ins} = load_map_data(event_id, actor, :all)
-          is_admin = admin_member?(event_id, actor.id, actor)
+          is_admin = manager_member?(event_id, actor.id, actor)
           current_location = Map.get(EventPresence.list_locations(event_id), actor.id)
 
           socket =
@@ -805,7 +806,7 @@ defmodule PlatserWeb.MapLive do
       %{kind: :poi, item: %Poi{} = poi} ->
         if can_comment_on_selected_map_object?(
              socket.assigns.selected_map_object_can_manage,
-             socket.assigns.event.allow_public_comments
+             socket.assigns.event.allow_participant_comments
            ) and comment != "" do
           case create_map_comment_entry(:poi, poi, comment, actor) do
             {:ok, _entry} ->
@@ -822,7 +823,7 @@ defmodule PlatserWeb.MapLive do
       %{kind: :geofence, item: %Geofence{} = geofence} ->
         if can_comment_on_selected_map_object?(
              socket.assigns.selected_map_object_can_manage,
-             socket.assigns.event.allow_public_comments
+             socket.assigns.event.allow_participant_comments
            ) and comment != "" do
           case create_map_comment_entry(:geofence, geofence, comment, actor) do
             {:ok, _entry} ->
@@ -1738,15 +1739,15 @@ defmodule PlatserWeb.MapLive do
   defp can_manage_selected_map_object?(_item, nil), do: false
 
   defp can_manage_selected_map_object?(%{creator_id: creator_id, event_id: event_id}, actor) do
-    creator_id == actor.id or admin_member?(event_id, actor.id, actor)
+    creator_id == actor.id or manager_member?(event_id, actor.id, actor)
   end
 
-  @spec admin_member?(Ecto.UUID.t(), Ecto.UUID.t(), Platser.Accounts.User.t()) :: boolean()
-  defp admin_member?(event_id, user_id, actor) do
+  @spec manager_member?(Ecto.UUID.t(), Ecto.UUID.t(), Platser.Accounts.User.t()) :: boolean()
+  defp manager_member?(event_id, user_id, actor) do
     case Platser.Events.list_memberships_for_event(event_id, actor: actor) do
       {:ok, memberships} ->
         Enum.any?(memberships, fn membership ->
-          membership.user_id == user_id and membership.role == :admin
+          membership.user_id == user_id and MapAccess.manager?(membership.role)
         end)
 
       {:error, _} ->
@@ -3042,7 +3043,7 @@ defmodule PlatserWeb.MapLive do
                 </div>
                 <%= if can_comment_on_selected_map_object?(
                        @selected_map_object_can_manage,
-                       @event.allow_public_comments
+                       @event.allow_participant_comments
                      ) do %>
                   <div class="px-4 py-3 border-b border-gray-100">
                     <.form

@@ -58,9 +58,35 @@ defmodule Platser.Events.Event do
     end
 
     update :update_settings do
-      description "Updates event settings. Admin only."
+      description "Updates event settings. Full manager only."
       require_atomic? false
-      accept [:allow_public_comments]
+
+      accept [
+        :allow_public_comments,
+        :allow_participant_comments,
+        :allow_participant_check_ins,
+        :allow_participant_live_location
+      ]
+
+      change fn changeset, _context ->
+        case Ash.Changeset.fetch_change(changeset, :allow_participant_comments) do
+          {:ok, allow?} ->
+            Ash.Changeset.force_change_attribute(changeset, :allow_public_comments, allow?)
+
+          :error ->
+            case Ash.Changeset.fetch_change(changeset, :allow_public_comments) do
+              {:ok, allow?} ->
+                Ash.Changeset.force_change_attribute(
+                  changeset,
+                  :allow_participant_comments,
+                  allow?
+                )
+
+              :error ->
+                changeset
+            end
+        end
+      end
     end
 
     update :set_bounds do
@@ -71,7 +97,7 @@ defmodule Platser.Events.Event do
     end
 
     update :update do
-      description "Updates event name, description, and dates. Admin only."
+      description "Updates event name, description, and dates. Full manager only."
       require_atomic? false
       accept [:name, :description, :starts_at, :ends_at]
       change Platser.Events.Changes.BroadcastEventUpdate
@@ -97,23 +123,48 @@ defmodule Platser.Events.Event do
     end
 
     policy action(:regenerate_join_code) do
-      authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
+      authorize_if expr(
+                     exists(
+                       memberships,
+                       user_id == ^actor(:id) and role in [:full_manager, :admin]
+                     )
+                   )
     end
 
     policy action(:invalidate_join_code) do
-      authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
+      authorize_if expr(
+                     exists(
+                       memberships,
+                       user_id == ^actor(:id) and role in [:full_manager, :admin]
+                     )
+                   )
     end
 
     policy action(:update_settings) do
-      authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
+      authorize_if expr(
+                     exists(
+                       memberships,
+                       user_id == ^actor(:id) and role in [:full_manager, :admin]
+                     )
+                   )
     end
 
     policy action(:set_bounds) do
-      authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
+      authorize_if expr(
+                     exists(
+                       memberships,
+                       user_id == ^actor(:id) and role in [:full_manager, :admin]
+                     )
+                   )
     end
 
     policy action(:update) do
-      authorize_if expr(exists(memberships, user_id == ^actor(:id) and role == :admin))
+      authorize_if expr(
+                     exists(
+                       memberships,
+                       user_id == ^actor(:id) and role in [:full_manager, :admin]
+                     )
+                   )
     end
   end
 
@@ -154,6 +205,21 @@ defmodule Platser.Events.Event do
     attribute :allow_public_comments, :boolean do
       allow_nil? false
       default false
+    end
+
+    attribute :allow_participant_comments, :boolean do
+      allow_nil? false
+      default false
+    end
+
+    attribute :allow_participant_check_ins, :boolean do
+      allow_nil? false
+      default true
+    end
+
+    attribute :allow_participant_live_location, :boolean do
+      allow_nil? false
+      default true
     end
 
     create_timestamp :inserted_at

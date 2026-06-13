@@ -28,6 +28,28 @@
 
 ## Staged Implementation Sequence
 
+### Task #97 Migration Implementation Notes
+
+- Status: implemented.
+- Added typed helpers for map-scoped roles/capabilities and participation settings:
+  `Platser.Events.MapAccess` and `Platser.Events.ParticipationSettings`.
+- Migration `20260613143918_migrate_membership_roles_and_participation_settings`
+  backfills legacy memberships:
+  `admin -> full_manager`, `member -> participant`.
+- New membership writes use `:full_manager` for event creators and `:participant`
+  for invite joins. Legacy `:admin` and `:member` remain readable through the
+  compatibility helper while later policy/UI cleanup lands.
+- Added persistent participant settings on `events`:
+  `allow_participant_comments`, `allow_participant_check_ins`, and
+  `allow_participant_live_location`.
+- `allow_public_comments` remains as a write-through compatibility column for
+  existing code and exports. Runtime comment checks now use
+  `allow_participant_comments`.
+- Manager eligibility is registered-user-only: guest memberships cannot be
+  promoted to `:full_manager` or `:content_manager`.
+- Site-wide `superuser` remains separate and still does not grant event reads,
+  private map-item reads, member-management powers, or settings updates.
+
 1. Capability vocabulary and compatibility helpers.
    - Add a small boundary/domain module for membership levels and capability
      checks with Elixir 1.20 `@type` closed unions and `@spec` on every function.

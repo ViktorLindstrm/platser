@@ -6,7 +6,7 @@ defmodule PlatserWeb.Events.JoinLive do
   alias Platser.Events
   alias Platser.Events.Membership
 
-  @type join_status :: :show | :already_member | :admin | :not_found | :joined | :guest_form
+  @type join_status :: :show | :already_member | :manager | :not_found | :joined | :guest_form
 
   @impl Phoenix.LiveView
   def mount(%{"code" => code}, _session, socket) do
@@ -113,8 +113,8 @@ defmodule PlatserWeb.Events.JoinLive do
                 </.link>
               </div>
             </div>
-          <% @status == :admin -> %>
-            <div id="admin-invite-panel" class="max-w-md w-full space-y-6">
+          <% @status == :manager -> %>
+            <div id="manager-invite-panel" class="max-w-md w-full space-y-6">
               <div class="bg-base-200 rounded-2xl p-8 space-y-6">
                 <div>
                   <span class="inline-block text-xs font-semibold uppercase tracking-widest text-primary mb-3">
@@ -302,7 +302,10 @@ defmodule PlatserWeb.Events.JoinLive do
 
   @spec resolve_status(Membership.t() | nil) :: join_status()
   defp resolve_status(nil), do: :show
-  defp resolve_status(%Membership{role: :admin}), do: :admin
+
+  defp resolve_status(%Membership{role: role}) when role in [:full_manager, :admin],
+    do: :manager
+
   defp resolve_status(%Membership{}), do: :already_member
 
   @spec format_error(any()) :: String.t()

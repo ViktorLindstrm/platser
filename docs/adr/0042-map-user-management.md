@@ -81,12 +81,15 @@ The existing `allow_public_comments` field becomes the first setting in a
 manager-only event participation policy. The eventual shape should be:
 
 - `allow_participant_comments`: boolean, default false.
-- `allow_participant_publishing`: boolean, default true.
-- `allow_participant_draft_creation`: boolean, default true.
+- `allow_participant_check_ins`: boolean, default true.
+- `allow_participant_live_location`: boolean, default true.
 
-The first implementation may keep the existing column and UI while renaming copy
-from "public comments" to "member comments". Any new setting must be enforced in
-Ash policies and mirrored in LiveView affordances.
+The membership migration implementation adds these three persistent settings in
+one migration. `allow_public_comments` remains temporarily as a write-through
+compatibility column, with runtime comment checks using
+`allow_participant_comments`. Later enforcement work must apply
+`allow_participant_check_ins` and `allow_participant_live_location` at the
+LiveView and Ash boundaries before restricted workflows are considered complete.
 
 ### Manager audit log
 

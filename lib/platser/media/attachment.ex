@@ -95,10 +95,21 @@ defmodule Platser.Media.Attachment do
 
     policy action_type(:destroy) do
       authorize_if expr(uploader_id == ^actor(:id))
-      authorize_if expr(exists(poi.event.memberships, user_id == ^actor(:id) and role == :admin))
 
       authorize_if expr(
-                     exists(geofence.event.memberships, user_id == ^actor(:id) and role == :admin)
+                     exists(
+                       poi.event.memberships,
+                       user_id == ^actor(:id) and
+                         role in [:full_manager, :content_manager, :admin]
+                     )
+                   )
+
+      authorize_if expr(
+                     exists(
+                       geofence.event.memberships,
+                       user_id == ^actor(:id) and
+                         role in [:full_manager, :content_manager, :admin]
+                     )
                    )
     end
   end

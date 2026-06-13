@@ -3,6 +3,7 @@ defmodule PlatserWeb.Events.IndexLive do
 
   alias Platser.Events
   alias Platser.Events.Event
+  alias Platser.Events.MapAccess
   alias Platser.Events.Membership
 
   @impl Phoenix.LiveView
@@ -148,12 +149,12 @@ defmodule PlatserWeb.Events.IndexLive do
         </div>
         <span class={[
           "shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold",
-          if(@my_role == :admin,
+          if(MapAccess.manager_role?(@my_role),
             do: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
             else: "bg-base-200 text-base-content/70"
           )
         ]}>
-          {if @my_role == :admin, do: "Admin", else: "Member"}
+          {MapAccess.label(@my_role)}
         </span>
       </div>
 
@@ -185,11 +186,11 @@ defmodule PlatserWeb.Events.IndexLive do
     """
   end
 
-  @spec find_role([Membership.t()], Ecto.UUID.t()) :: :admin | :member
+  @spec find_role([Membership.t()], Ecto.UUID.t()) :: MapAccess.compatible_role()
   defp find_role(memberships, user_id) do
     case Enum.find(memberships, &(&1.user_id == user_id)) do
       %Membership{role: role} -> role
-      nil -> :member
+      nil -> :participant
     end
   end
 end

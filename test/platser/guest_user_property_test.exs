@@ -176,7 +176,7 @@ defmodule Platser.GuestUserPropertyTest do
         guest_membership = Enum.find(memberships, &(&1.user_id == guest.id))
 
         assert guest_membership != nil
-        assert guest_membership.role == :member
+        assert guest_membership.role == :participant
       end
     end
   end
